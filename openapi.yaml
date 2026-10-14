@@ -1,0 +1,367 @@
+
+openapi: 3.0.3
+
+info:
+  title: CareerPilot API
+  version: 1.0.0
+  description: |
+    REST API for the CareerPilot job application tracking
+    and resume matching platform.
+
+servers:
+  - url: http://localhost:8000
+
+tags:
+  - name: Health
+  - name: Applications
+  - name: Dashboard
+  - name: Resume Matching
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: healthCheck
+      summary: Check API health
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /applications:
+    get:
+      tags: [Applications]
+      operationId: listApplications
+      summary: List and filter job applications
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ApplicationStatus'
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Application list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Application'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+    post:
+      tags: [Applications]
+      operationId: createApplication
+      summary: Create a job application
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplicationCreate'
+      responses:
+        '201':
+          description: Application created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Application'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /applications/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+
+    get:
+      tags: [Applications]
+      operationId: getApplication
+      summary: Get a job application
+      responses:
+        '200':
+          description: Application found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Application'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+    patch:
+      tags: [Applications]
+      operationId: updateApplication
+      summary: Update a job application
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplicationUpdate'
+      responses:
+        '200':
+          description: Application updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Application'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+    delete:
+      tags: [Applications]
+      operationId: deleteApplication
+      summary: Delete a job application
+      responses:
+        '204':
+          description: Application deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /dashboard:
+    get:
+      tags: [Dashboard]
+      operationId: getDashboard
+      summary: Get application statistics and upcoming interviews
+      responses:
+        '200':
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardResponse'
+
+  /resume/match:
+    post:
+      tags: [Resume Matching]
+      operationId: matchResume
+      summary: Compare resume text with a job description
+      description: |
+        Returns a deterministic heuristic match score.
+        Submitted resume text is not stored by the matching service.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResumeMatchRequest'
+      responses:
+        '200':
+          description: Resume matching results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResumeMatchResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+
+    ApplicationStatus:
+      type: string
+      enum:
+        - Saved
+        - Applied
+        - Interview
+        - Offer
+        - Rejected
+
+    ApplicationCreate:
+      type: object
+      required:
+        - company_name
+        - job_title
+        - application_date
+      properties:
+        company_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        job_title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        job_description:
+          type: string
+          nullable: true
+        application_date:
+          type: string
+          format: date
+        status:
+          $ref: '#/components/schemas/ApplicationStatus'
+        job_url:
+          type: string
+          format: uri
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        interview_at:
+          type: string
+          format: date-time
+          nullable: true
+        interview_notes:
+          type: string
+          nullable: true
+
+    ApplicationUpdate:
+      type: object
+      description: Partial update. Supply at least one field.
+      minProperties: 1
+      properties:
+        company_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        job_title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        job_description:
+          type: string
+          nullable: true
+        application_date:
+          type: string
+          format: date
+        status:
+          $ref: '#/components/schemas/ApplicationStatus'
+        job_url:
+          type: string
+          format: uri
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        interview_at:
+          type: string
+          format: date-time
+          nullable: true
+        interview_notes:
+          type: string
+          nullable: true
+
+    Application:
+      allOf:
+        - $ref: '#/components/schemas/ApplicationCreate'
+        - type: object
+          required: [id, status, created_at, updated_at]
+          properties:
+            id:
+              type: integer
+              minimum: 1
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    DashboardResponse:
+      type: object
+      required: [total, by_status, upcoming_interviews, recent_applications]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        by_status:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 0
+        upcoming_interviews:
+          type: array
+          items:
+            $ref: '#/components/schemas/Application'
+        recent_applications:
+          type: array
+          items:
+            $ref: '#/components/schemas/Application'
+
+    ResumeMatchRequest:
+      type: object
+      required: [resume_text, job_description]
+      properties:
+        resume_text:
+          type: string
+          minLength: 1
+        job_description:
+          type: string
+          minLength: 1
+
+    ResumeMatchResponse:
+      type: object
+      required: [score, matched_keywords, missing_keywords, suggestions]
+      properties:
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Heuristic keyword match score, not a hiring prediction
+        matched_keywords:
+          type: array
+          items:
+            type: string
+        missing_keywords:
+          type: array
+          items:
+            type: string
+        suggestions:
+          type: array
+          items:
+            type: string
+
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+
+  responses:
+    NotFound:
+      description: Requested application was not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true

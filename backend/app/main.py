@@ -1,11 +1,16 @@
 
 from fastapi import FastAPI
 
+from backend.app.routers.applications import router as applications_router
+
+
 app = FastAPI(
     title="CareerPilot API",
     description="Job application tracking and career preparation API",
     version="1.0.0",
 )
+
+app.include_router(applications_router)
 
 
 @app.get("/health", tags=["Health"])

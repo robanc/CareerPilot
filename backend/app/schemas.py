@@ -76,3 +76,15 @@ class DashboardResponse(BaseModel):
     by_status: DashboardStatusCounts
     upcoming_interviews: list[ApplicationResponse]
     recent_applications: list[ApplicationResponse]
+
+
+class ResumeMatchRequest(BaseModel):
+    resume_text: str = Field(min_length=1)
+    job_description: str = Field(min_length=1)
+
+
+class ResumeMatchResponse(BaseModel):
+    score: int = Field(ge=0, le=100)
+    matched_keywords: list[str]
+    missing_keywords: list[str]
+    suggestions: list[str]

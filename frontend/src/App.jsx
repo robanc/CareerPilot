@@ -17,7 +17,7 @@ function App() {
     async function loadDashboard() {
       try {
         const response = await fetch(
-          'http://127.0.0.1:8001/dashboard',
+          `${import.meta.env.VITE_API_URL ?? '/api'}/dashboard`,
           { signal: controller.signal }
         )
 

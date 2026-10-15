@@ -61,3 +61,18 @@ class ApplicationResponse(ApplicationCreate):
     id: int
     created_at: datetime
     updated_at: datetime
+
+
+class DashboardStatusCounts(BaseModel):
+    Saved: int = 0
+    Applied: int = 0
+    Interview: int = 0
+    Offer: int = 0
+    Rejected: int = 0
+
+
+class DashboardResponse(BaseModel):
+    total: int
+    by_status: DashboardStatusCounts
+    upcoming_interviews: list[ApplicationResponse]
+    recent_applications: list[ApplicationResponse]

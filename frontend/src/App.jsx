@@ -1,6 +1,7 @@
 
 import { useEffect, useState } from 'react'
 import Applications from './Applications'
+import ResumeMatch from './ResumeMatch'
 import './App.css'
 
 function App() {
@@ -105,13 +106,10 @@ function App() {
               )}
             </>
           ) : page === 'Applications' ? (
-            <Applications />
-          ) : (
-            <>
-              <h3>Resume Match</h3>
-              <p>Compare your resume against a job description here.</p>
-            </>
-          )}
+  <Applications />
+) : (
+  <ResumeMatch />
+)}
         </section>
       </main>
     </div>

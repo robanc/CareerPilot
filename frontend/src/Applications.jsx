@@ -11,6 +11,7 @@ function Applications() {
   const [saving, setSaving] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [editStatus, setEditStatus] = useState('Saved')
+  const [editInterviewAt, setEditInterviewAt] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('All')
 
@@ -95,7 +96,12 @@ async function handleSaveChanges() {
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: editStatus }),
+        body: JSON.stringify({
+  status: editStatus,
+  interview_at: editInterviewAt
+    ? new Date(editInterviewAt).toISOString()
+    : null,
+}),
       }
     )
 
@@ -280,9 +286,20 @@ async function handleSaveChanges() {
 <button
   type="button"
   onClick={() => {
-    setEditingId(application.id)
-    setEditStatus(application.status)
-  }}
+  setEditingId(application.id)
+  setEditStatus(application.status)
+  setEditInterviewAt(
+  application.interview_at
+    ? (() => {
+        const date = new Date(application.interview_at)
+        const localDate = new Date(
+          date.getTime() - date.getTimezoneOffset() * 60000
+        )
+        return localDate.toISOString().slice(0, 16)
+      })()
+    : ''
+)
+}}
 >
   Edit
 </button>
@@ -313,6 +330,15 @@ async function handleSaveChanges() {
         )}
       </select>
     </label>
+
+<label>
+  Interview Date and Time
+  <input
+    type="datetime-local"
+    value={editInterviewAt}
+    onChange={(e) => setEditInterviewAt(e.target.value)}
+  />
+</label>
 
     <button
   type="button"

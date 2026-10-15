@@ -396,3 +396,54 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Edit Application Form */
+
+.edit-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 18px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+.edit-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.edit-form input,
+.edit-form select {
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font: inherit;
+  background: white;
+}
+
+.edit-form button {
+  padding: 11px 16px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: white;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.edit-form button:first-of-type {
+  background: #2563eb;
+  color: white;
+  border-color: #2563eb;
+}
+
+.edit-form button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}

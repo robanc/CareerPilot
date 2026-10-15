@@ -89,19 +89,46 @@ function App() {
                     )}
                   </div>
 
-                  <h3>Upcoming Interviews</h3>
-                  <p>
-                    {dashboard.upcoming_interviews.length === 0
-                      ? 'No upcoming interviews.'
-                      : `${dashboard.upcoming_interviews.length} upcoming interviews`}
-                  </p>
+                  
+<h3>Upcoming Interviews</h3>
 
-                  <h3>Recent Applications</h3>
-                  <p>
-                    {dashboard.recent_applications.length === 0
-                      ? 'No applications yet.'
-                      : `${dashboard.recent_applications.length} recent applications`}
-                  </p>
+{dashboard.upcoming_interviews.length === 0 ? (
+  <p>No upcoming interviews.</p>
+) : (
+  <div className="applications-list">
+    {dashboard.upcoming_interviews.map((application) => (
+      <div className="application-item" key={application.id}>
+        <h4>{application.job_title}</h4>
+        <p>{application.company_name}</p>
+        <p>
+          Interview Date:{' '}
+          {new Date(application.interview_at).toLocaleString()}
+        </p>
+        <p>Status: {application.status}</p>
+      </div>
+    ))}
+  </div>
+)}
+
+
+                  
+<h3>Recent Applications</h3>
+
+{dashboard.recent_applications.length === 0 ? (
+  <p>No applications yet.</p>
+) : (
+  <div className="applications-list">
+    {dashboard.recent_applications.map((application) => (
+      <div className="application-item" key={application.id}>
+        <h4>{application.job_title}</h4>
+        <p>{application.company_name}</p>
+        <p>Status: {application.status}</p>
+        <p>Applied: {application.application_date}</p>
+      </div>
+    ))}
+  </div>
+)}
+
                 </>
               )}
             </>

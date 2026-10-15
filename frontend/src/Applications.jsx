@@ -11,6 +11,8 @@ function Applications() {
   const [saving, setSaving] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [editStatus, setEditStatus] = useState('Saved')
+  const [searchTerm, setSearchTerm] = useState('')
+  const [statusFilter, setStatusFilter] = useState('All')
 
   const [form, setForm] = useState({
     company_name: '',
@@ -150,6 +152,19 @@ async function handleSaveChanges() {
     }
   }
 
+   const filteredApplications = applications.filter((application) => {
+    const search = searchTerm.trim().toLowerCase()
+
+    const matchesSearch =
+      application.company_name.toLowerCase().includes(search) ||
+      application.job_title.toLowerCase().includes(search)
+
+    const matchesStatus =
+      statusFilter === 'All' || application.status === statusFilter
+
+    return matchesSearch && matchesStatus
+  })
+
   return (
     <div>
       <h3>Add Job Application</h3>
@@ -218,14 +233,45 @@ async function handleSaveChanges() {
       {error && <p role="alert">{error}</p>}
 
       <h3>Job Applications</h3>
+      <div className="application-filters">
+  <label>
+    Search Applications
+    <input
+      type="search"
+      value={searchTerm}
+      onChange={(e) => setSearchTerm(e.target.value)}
+      placeholder="Search company or job title..."
+    />
+  </label>
+
+  <label>
+    Filter by Status
+    <select
+      value={statusFilter}
+      onChange={(e) => setStatusFilter(e.target.value)}
+    >
+      {['All', 'Saved', 'Applied', 'Interview', 'Offer', 'Rejected'].map(
+        (status) => (
+          <option key={status} value={status}>
+            {status}
+          </option>
+        )
+      )}
+    </select>
+  </label>
+</div>
 
       {loading ? (
         <p>Loading applications...</p>
-      ) : applications.length === 0 ? (
-        <p>No applications yet.</p>
-      ) : (
+      ) : filteredApplications.length === 0 ? (
+  <p>
+    {applications.length === 0
+      ? 'No applications yet.'
+      : 'No applications match your search or filter.'}
+  </p>
+) : (
         <div className="applications-list">
-          {applications.map((application) => (
+          {filteredApplications.map((application) => (
             <div className="application-item" key={application.id}>
               <h4>{application.job_title}</h4>
               <p>{application.company_name}</p>

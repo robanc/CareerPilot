@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Read-only token: this workflow never writes to the repository,
+# publishes packages, or deploys.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-tests:
+    name: Backend tests (pytest + PostgreSQL 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Temporary CI-only credentials. They exist only inside the ephemeral
+      # service container below and are not secrets or production values.
+      POSTGRES_USER: careerpilot_ci
+      POSTGRES_PASSWORD: careerpilot_ci_password
+      POSTGRES_DB: careerpilot_ci
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+      PGPASSWORD: careerpilot_ci_password
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: careerpilot_ci
+          POSTGRES_PASSWORD: careerpilot_ci_password
+          POSTGRES_DB: careerpilot_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U careerpilot_ci -d careerpilot_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+
+      - name: Create careerpilot_test database (idempotent)
+        run: |
+          exists=$(psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+            -v ON_ERROR_STOP=1 -tAc \
+            "SELECT 1 FROM pg_database WHERE datname = 'careerpilot_test'")
+          if [ "$exists" != "1" ]; then
+            createdb -h "$POSTGRES_HOST" -U "$POSTGRES_USER" careerpilot_test
+          fi
+          psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d careerpilot_test \
+            -v ON_ERROR_STOP=1 -tAc "SELECT current_database()"
+
+      # Run from the repository root with "python -m" so the "backend"
+      # package is importable (there is no backend/__init__.py).
+      - name: Run pytest
+        run: python -m pytest backend/tests -v
+
+  frontend:
+    name: Frontend lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Production build
+        run: npm run build
+
+  docker-build:
+    name: Docker image build verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      # docker-compose.yml requires these variables; dummy values are used
+      # only to validate the file. No containers are started.
+      - name: Validate docker-compose.yml
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        run: docker compose config --quiet
+
+      # Images are built locally on the runner and never pushed.
+      - name: Build backend image
+        run: docker build --tag careerpilot-backend:ci ./backend
+
+      - name: Build frontend image
+        run: docker build --tag careerpilot-frontend:ci ./frontend

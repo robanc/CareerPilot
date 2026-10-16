@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from backend.app.database import Base, get_db, local_database_url, reset_engine
 from backend.app.main import app
 import backend.app.models  # Register database models
+from backend.tests.db_safety import reset_test_schema
 
 
 # Built from the local POSTGRES_* settings, with the database name forced to
@@ -38,9 +39,9 @@ def use_test_database():
     # Safety check: never run cleanup against development database.
     assert TEST_DATABASE_URL.database == "careerpilot_test"
 
-    # Reset test tables before each test.
-    Base.metadata.drop_all(bind=test_engine)
-    Base.metadata.create_all(bind=test_engine)
+    # Reset test tables before each test, only after confirming the live
+    # current_database() on the same connection. See db_safety.py.
+    reset_test_schema(test_engine, Base.metadata)
 
     def override_get_db():
         db = TestingSessionLocal()

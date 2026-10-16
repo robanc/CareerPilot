@@ -456,3 +456,89 @@ All blockers from Entries 004 and 005 still apply, except mode-aware engine crea
 ### Outcome
 
 The backend now creates its database engine lazily. In `local` mode it connects with POSTGRES_* exactly as before. In `public_demo` it connects only with the validated `CAREERPILOT_DEMO_DATABASE_URL` and fails closed otherwise. The database itself is not yet read-only.
+
+## Entry 007 — Read-Only Sessions and public_demo Schema Check (Step 73B)
+
+**Date:** October 16, 2026
+**AI Coding Agent:** Claude Code (Claude Opus 5.5)
+**Development Method:** Human-supervised, agent-assisted implementation
+**Status:** Implemented and verified locally on branch `feature/render-readonly-demo`; awaiting developer review; not committed
+
+### Objective
+
+Implement the code-only part of the Step 73A preflight design: read-only database sessions for `public_demo`, no `create_all` in `public_demo` startup, and a stronger live guard before destructive test cleanup.
+
+> **The dedicated SELECT-only PostgreSQL role is NOT implemented, and there are no real-database tests of write rejection by role privileges.** Read-only transactions are defense-in-depth, not a privilege boundary: a client that can run SQL can `SET` them off. If `CAREERPILOT_DEMO_DATABASE_URL` held owner credentials, the database would still allow writes after such a `SET`. `public_demo` remains **NOT SAFE TO DEPLOY**.
+
+### Agent Workflow
+
+1. Step 73A was an inspection-only preflight. It produced a design that the developer approved, and the code-only portion was scoped as Step 73B.
+2. The Step 73B prompt prohibited creating roles, changing PostgreSQL permissions, seeding, deploying, committing, pushing, reading `.env`, and running SQL against any non-test database.
+3. Claude Code read `CLAUDE.md`, `AGENTS.md`, `database.py`, `main.py`, `settings.py`, `conftest.py`, and the existing database tests. It then implemented the change, added tests, ran mutation checks and the focused and full suites, and reviewed the diff.
+
+### Files Changed
+
+- `backend/app/database.py` — `create_read_only_engine()` is used only in `public_demo`. It sends the libpq startup options `-c default_transaction_read_only=on -c statement_timeout=5000` and registers a connect hook, `verify_read_only_session()`. Also adds `verify_schema()`, and `init_db()` now refuses to run in `public_demo`. Adds `ReadOnlySessionError` and `SchemaError`.
+- `backend/app/main.py` — In `public_demo` the lifespan calls `verify_schema()` instead of `init_db()`, and the startup warning is updated. Local startup is unchanged.
+- `backend/app/settings.py` — Docstring only.
+- `backend/tests/db_safety.py` — New: `require_test_database()` and `reset_test_schema()`.
+- `backend/tests/conftest.py` — The per-test reset now uses `reset_test_schema()`. The existing URL-name assertion is kept unchanged.
+- `backend/tests/test_database_init.py` — The direct `drop_all` now runs after the live check, on the same connection.
+- `backend/tests/test_database_engine.py` — Docstring only.
+- `backend/tests/test_database_readonly_session.py` — New: 25 tests.
+- `backend/tests/test_db_safety.py` — New: 16 tests.
+- `docs/ai-development-log.md` — This entry.
+
+### Design and Safety Decisions
+
+- **public_demo only.** Local mode still builds `create_engine(url, pool_pre_ping=True)` with no options and no hook. Local CRUD and `init_db()` are unchanged.
+- **The URL cannot disable read-only.** SQLAlchemy applies `connect_args` after the URL's query parameters. A demo URL containing `?options=-c default_transaction_read_only=off` is overridden, while other query options such as `sslmode` are kept.
+- **Verified on every new connection (fail closed).** The connect hook reads `pg_settings` and closes the connection, raising `ReadOnlySessionError`, unless `default_transaction_read_only` is `on` and `statement_timeout` is `5000`. This catches a server or pooler that ignores startup options. The error names the setting only, never the URL.
+- **`statement_timeout` = 5 s** limits slow or abusive queries, such as `pg_sleep`. It is not rate limiting.
+- **No `create_all` in public_demo.** `verify_schema()` only inspects the catalog. A missing table raises `SchemaError` without retrying, so startup fails closed. Connection errors are retried as in `init_db()`. As defense-in-depth, `init_db()` raises `SettingsError` in `public_demo` even if it is called directly with a `bind`.
+- **Live test-database guard.** `reset_test_schema()` opens one connection and one transaction. In that transaction it checks the configured name, then checks the live `SELECT current_database()` for an exact, case-sensitive `str` match on `careerpilot_test`, and only then runs `drop_all`/`create_all`. The check and the cleanup cannot target different databases. The guard uses explicit raises, not `assert`, so it survives `python -O`. Any error during the check propagates, so cleanup never runs, and there is no skip or override switch.
+
+### Test Isolation
+
+- Unit tests use placeholder URLs on the never-resolving `.invalid` domain. The DBAPI `connect` call, DBAPI connections, the schema inspector, and `create_all` are replaced with fakes, so no external or development database is contacted.
+- **One real-database test:** `test_read_only_session_rejects_writes_on_test_database` builds a read-only engine for `careerpilot_test` with the test (owner) credentials. It passes the live guard, confirms that `transaction_read_only` is `on` and `statement_timeout` is `5s`, and confirms that PostgreSQL 16 rejects `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, and `CREATE TEMP TABLE` with "read-only transaction". It proves the session settings work on a real server and that the connect hook accepts the real `pg_settings` values. It does **not** prove anything about role privileges.
+
+### Verification Results (Local)
+
+- Baseline before changes: `python -m pytest backend/tests -q` gave **191 passed**.
+- Focused: `test_database_readonly_session.py`, `test_db_safety.py`, `test_database_init.py`, and `test_database_engine.py` gave **71 passed, 0 failed** before the integration test was added. `test_database_readonly_session.py` gave **25 passed** after it was added.
+- Full suite: `python -m pytest backend/tests -q` gave **232 passed, 0 failed**, 1 warning (the existing `httpx` deprecation warning). 41 tests are new.
+- `python -O -m pytest backend/tests/test_db_safety.py -q` gave **16 passed**, so the guard does not depend on `assert`.
+- Mutation checks (each file restored from a backup and confirmed with a byte comparison). Each mutation made the full suite fail:
+  - Removing the startup options: 4 failed.
+  - Removing the connect hook: 1 failed.
+  - Calling `init_db()` in public_demo startup: 3 failed.
+  - Removing the `init_db()` public_demo guard: 2 failed.
+  - Ignoring missing tables: 2 failed.
+  - Ignoring wrong session settings: 5 failed.
+  - Removing the live `current_database()` check: 13 failed.
+  - Running `drop_all` before the check: 3 failed.
+- `git diff` and `git status` reviewed.
+
+### Verification Pending
+
+- GitHub Actions CI: **Not run** (not committed or pushed).
+- Docker Compose run: **Not run** (local mode is unchanged).
+- Render: whether its connection path accepts libpq `options` is **unverified**. If it does not, the connect hook makes `public_demo` refuse every connection; it fails closed and never silently continues.
+
+### Human Oversight
+
+The developer approved the Step 73A design and limited this step to code. Claude Code did not read `.env`, create roles, change grants or database permissions, seed data, change Docker Compose or CI, deploy, commit, or push. The only database it connected to was `careerpilot_test`, through the existing test credentials.
+
+### Remaining Deployment Blockers
+
+- **The dedicated SELECT-only role is pending.** That covers the role setup script, grants, `ALTER DEFAULT PRIVILEGES`, `REVOKE TEMPORARY ... FROM PUBLIC` on `careerpilot_test`, and the CI setup step. All of it needs developer approval before any PostgreSQL state changes (see the Step 73A preflight).
+- **Real write-rejection tests by role privileges against `careerpilot_test` are pending.** These include ownership, membership, and superuser checks.
+- A startup privilege check that the demo role cannot write.
+- An admin bootstrap and insert-only seed tool, plus rate limiting, resume input limits, and synthetic-data safeguards, as listed in earlier entries.
+
+`public_demo` remains **NOT SAFE TO DEPLOY**.
+
+### Outcome
+
+`public_demo` connections are now read-only with a 5-second statement timeout, and this is verified on every connection. `public_demo` startup never creates tables and fails closed if the schema is missing. Destructive test cleanup now requires the live database to be exactly `careerpilot_test`. Local mode is unchanged.

@@ -256,7 +256,7 @@ def test_switching_to_broken_public_demo_does_not_reuse_local_engine(clean_env):
 
 
 def test_startup_refused_for_invalid_demo_url(public_demo_env):
-    """The lifespan fails in init_db's engine lookup, before any connection."""
+    """The lifespan fails in verify_schema's engine lookup, before connecting."""
     public_demo_env.setenv("CAREERPILOT_DEMO_DATABASE_URL", "sqlite:///demo.db")
     state = main_module.app.state
     previous = getattr(state, "settings", None)

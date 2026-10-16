@@ -3,6 +3,7 @@ from sqlalchemy import inspect
 
 from backend.app.database import Base, init_db
 from backend.app.main import app
+from backend.tests.db_safety import require_test_database
 
 
 client = TestClient(app)
@@ -27,8 +28,10 @@ def test_init_db_creates_missing_table(test_db_engine):
     assert_targets_test_database(test_db_engine)
 
     # Start from an empty schema. Confined to careerpilot_test by the guard
-    # above; mirrors what the autouse fixture already does per test.
-    Base.metadata.drop_all(bind=test_db_engine)
+    # above and by the live check on the same connection as the drop.
+    with test_db_engine.begin() as connection:
+        require_test_database(connection)
+        Base.metadata.drop_all(bind=connection)
 
     assert not inspect(test_db_engine).has_table(TABLE_NAME)
 

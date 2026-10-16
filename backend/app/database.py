@@ -10,10 +10,15 @@ app) builds no engine and reads no database credentials.
   (CAREERPILOT_DEMO_DATABASE_URL). POSTGRES_* are ignored even when set, and
   there is no fallback: a missing or invalid demo URL raises SettingsError.
 
-WARNING: this only selects which credentials are used. The demo role's
-PostgreSQL privileges and read-only transactions are NOT enforced yet, so
-public_demo is still NOT SAFE TO DEPLOY. Error messages name variables but
-never include their values.
+public_demo connections are also session-level read-only: every connection
+starts with default_transaction_read_only=on and a short statement_timeout,
+and is checked on connect, failing closed if the server did not apply them.
+public_demo startup never runs create_all; it only verifies the tables exist.
+
+WARNING: read-only transactions are defense-in-depth, not a privilege
+boundary -- a client can SET them off. The dedicated SELECT-only demo role is
+NOT created or enforced yet, so public_demo is still NOT SAFE TO DEPLOY.
+Error messages name variables but never include their values.
 """
 
 import os
@@ -23,7 +28,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.engine import URL, Engine, make_url
 from sqlalchemy.exc import ArgumentError, OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -48,6 +53,32 @@ DRIVERNAME = "postgresql+psycopg"
 # "postgresql://" is the form hosting providers usually supply.
 DEMO_URL_DRIVERNAMES = ("postgresql", DRIVERNAME)
 LOCAL_REQUIRED_ENV_VARS = ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB")
+
+# public_demo session settings, sent as libpq startup options. They override
+# any "options" query parameter in the demo URL, so the URL cannot turn
+# read-only off.
+PUBLIC_DEMO_STATEMENT_TIMEOUT_MS = 5000
+PUBLIC_DEMO_CONNECT_OPTIONS = (
+    "-c default_transaction_read_only=on "
+    f"-c statement_timeout={PUBLIC_DEMO_STATEMENT_TIMEOUT_MS}"
+)
+# Expected pg_settings values (statement_timeout is in milliseconds there).
+PUBLIC_DEMO_SESSION_SETTINGS = {
+    "default_transaction_read_only": "on",
+    "statement_timeout": str(PUBLIC_DEMO_STATEMENT_TIMEOUT_MS),
+}
+PUBLIC_DEMO_SETTINGS_QUERY = (
+    "SELECT name, setting FROM pg_settings "
+    "WHERE name IN ('default_transaction_read_only', 'statement_timeout')"
+)
+
+
+class ReadOnlySessionError(RuntimeError):
+    """Raised when a public_demo connection is not read-only as required."""
+
+
+class SchemaError(RuntimeError):
+    """Raised when public_demo finds the database schema incomplete."""
 
 
 def local_database_url(environ: Mapping[str, str] | None = None) -> URL:
@@ -120,9 +151,55 @@ def database_url_for(settings: Settings) -> URL:
     return local_database_url()
 
 
+def verify_read_only_session(dbapi_connection, connection_record=None) -> None:
+    """Connect hook: fail closed unless the session settings took effect.
+
+    Guards against a server or pooler that silently ignores the startup
+    options. On failure the connection is closed, never handed out.
+    """
+    try:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute(PUBLIC_DEMO_SETTINGS_QUERY)
+            actual = {name: setting for name, setting in cursor.fetchall()}
+        finally:
+            cursor.close()
+        # End the implicit transaction the check opened.
+        dbapi_connection.rollback()
+    except Exception:
+        dbapi_connection.close()
+        raise
+
+    wrong = [
+        name
+        for name, expected in PUBLIC_DEMO_SESSION_SETTINGS.items()
+        if actual.get(name) != expected
+    ]
+    if wrong:
+        dbapi_connection.close()
+        raise ReadOnlySessionError(
+            f"Refusing to use a public_demo connection: "
+            f"{', '.join(wrong)} was not applied by the server."
+        )
+
+
+def create_read_only_engine(url: URL) -> Engine:
+    """Create a public_demo engine whose every connection is read-only."""
+    engine = create_engine(
+        url,
+        pool_pre_ping=True,
+        connect_args={"options": PUBLIC_DEMO_CONNECT_OPTIONS},
+    )
+    event.listen(engine, "connect", verify_read_only_session)
+    return engine
+
+
 def create_engine_for(settings: Settings) -> Engine:
     """Create (but do not connect) the engine for the given mode."""
-    return create_engine(database_url_for(settings), pool_pre_ping=True)
+    url = database_url_for(settings)
+    if settings.is_public_demo:
+        return create_read_only_engine(url)
+    return create_engine(url, pool_pre_ping=True)
 
 
 _lock = threading.Lock()
@@ -214,6 +291,13 @@ def init_db(
     # router import chain in main.py.
     from backend.app import models  # noqa: F401
 
+    # Defense-in-depth: the lifespan already calls verify_schema instead in
+    # public_demo, but create_all must never run there even if called.
+    if load_settings().is_public_demo:
+        raise SettingsError(
+            "Refusing to run create_all: public_demo never creates tables."
+        )
+
     target = get_engine() if bind is None else bind
 
     for attempt in range(1, retries + 1):
@@ -224,3 +308,41 @@ def init_db(
             if attempt == retries:
                 raise
             time.sleep(delay_seconds)
+
+
+def verify_schema(
+    bind=None,
+    retries: int = 5,
+    delay_seconds: float = 1.0,
+) -> None:
+    """public_demo startup check: every model table must already exist.
+
+    Read-only: it inspects the catalog and never creates, alters, or drops
+    anything. A missing table raises SchemaError (not retried), so startup
+    fails closed. The schema must be created with owner credentials outside
+    the public API process. Retries cover connection errors only, as in
+    init_db.
+    """
+    from backend.app import models  # noqa: F401
+
+    target = get_engine() if bind is None else bind
+
+    for attempt in range(1, retries + 1):
+        try:
+            inspector = inspect(target)
+            missing = [
+                name
+                for name in sorted(Base.metadata.tables)
+                if not inspector.has_table(name)
+            ]
+            break
+        except OperationalError:
+            if attempt == retries:
+                raise
+            time.sleep(delay_seconds)
+
+    if missing:
+        raise SchemaError(
+            f"Refusing to start: public_demo database is missing required "
+            f"tables: {', '.join(missing)}. public_demo never creates tables."
+        )

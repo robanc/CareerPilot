@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 
-from backend.app.database import init_db
+from backend.app.database import init_db, verify_schema
 from backend.app.readonly import ReadOnlyMiddleware
 from backend.app.routers.applications import router as applications_router
 from backend.app.routers.dashboard import router as dashboard_router
@@ -24,15 +24,17 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     if settings.is_public_demo:
         logger.warning(
-            "CAREERPILOT_MODE=public_demo: HTTP write requests are blocked, "
-            "but database restrictions, rate limiting, and resume input "
-            "limits are NOT implemented; this instance is NOT SAFE TO "
-            "EXPOSE publicly."
+            "CAREERPILOT_MODE=public_demo: HTTP writes are blocked and "
+            "database sessions are read-only, but the SELECT-only database "
+            "role, rate limiting, and resume input limits are NOT "
+            "implemented; this instance is NOT SAFE TO EXPOSE publicly."
         )
-
-    # Create missing tables so a fresh deployment has a usable schema.
-    # Conditional and non-destructive; see database.init_db.
-    init_db()
+        # Never create tables in public_demo; only confirm they exist.
+        verify_schema()
+    else:
+        # Create missing tables so a fresh deployment has a usable schema.
+        # Conditional and non-destructive; see database.init_db.
+        init_db()
     yield
 
 

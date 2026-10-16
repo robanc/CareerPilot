@@ -306,3 +306,73 @@ Claude Code did not read `.env`, deploy, commit, or push.
 ### Outcome
 
 In `public_demo` mode, the backend now rejects every request outside a narrow read-only allowlist, using two independent layers. `local` mode keeps full CRUD. The demo is still not deployable until the blockers above are resolved.
+
+## Entry 005 — `public_demo` Database Settings Validation (Step 72B)
+
+**Date:** October 16, 2026
+**AI Coding Agent:** Claude Code (Claude Opus 5.5)
+**Development Method:** Human-supervised, agent-assisted implementation
+**Status:** Implemented and verified locally on branch `feature/render-readonly-demo`; awaiting developer review; not committed
+
+### Objective
+
+Add the configuration-level groundwork for database-level read-only protection. This is the first increment of the Step 72A design. In that design, `public_demo` connects through a dedicated SELECT-only role, with read-only transactions as a second layer, and administrative credentials never reach the public API process.
+
+> **Database-level enforcement is NOT implemented yet.** This step only validates environment variables at startup. Nothing connects with `CAREERPILOT_DEMO_DATABASE_URL`; `backend/app/database.py` is unchanged and still connects with `POSTGRES_*`. No database role, read-only transaction setting, privilege check, or seeding exists.
+
+### Agent Workflow
+
+1. Step 72A (design only): Claude Code read the guidance files, the backend database, settings, read-only, and startup code, the models, the database tests, the Docker Compose file, and the CI workflow. It then proposed the role-plus-read-only-transaction design. The developer approved implementing only the settings step.
+2. The developer's Step 72B prompt prohibited changing `database.py`, creating database roles, connecting to PostgreSQL for this purpose, seeding, deploying, committing, pushing, or reading `.env`.
+3. Claude Code changed `settings.py`, added tests, ran the focused and full backend suites, mutation-checked both new rules, and reviewed the diff.
+
+### Files Changed
+
+- `backend/app/settings.py` — In `public_demo`, requires a non-empty `CAREERPILOT_DEMO_DATABASE_URL` and refuses startup if `DATABASE_URL` or `CAREERPILOT_ADMIN_DATABASE_URL` is present. Adds a `Settings.demo_database_url` field, which is excluded from `repr`. Updates the module docstring.
+- `backend/tests/test_settings.py` — Updates three existing `public_demo` tests to supply the demo URL. Adds 30 tests.
+- `backend/tests/test_readonly.py` — Updates the environment-based `public_demo` test to supply the demo URL and clear the forbidden variables. Adds one test showing a missing demo URL returns `503`.
+- `docs/ai-development-log.md` — This entry.
+
+### Design and Safety Decisions
+
+- **Rules apply only in `public_demo`.** In `local` mode (the default, used by Docker Compose and the tests), all three variables are ignored and `demo_database_url` is `None`. `docker-compose.yml` is unchanged.
+- **Presence is rejected, not just non-empty values.** `DATABASE_URL` or `CAREERPILOT_ADMIN_DATABASE_URL` set to anything, including an empty string, refuses startup. `DATABASE_URL` is rejected because linking a Render database typically injects the owner connection string under that name (to be verified at deployment).
+- **Whitespace-only demo URL is treated as missing.** The value is stripped. Its format is not validated yet; that belongs with the engine change.
+- **Order of checks.** The existing mode checks (invalid mode, and Render without `public_demo`) run first, so their errors are unchanged. The forbidden-variable check runs before the demo-URL check, and the error names every forbidden variable that is present.
+- **No credential leakage.** Error messages name variables but never include values, and `Settings.__repr__` omits the URL. Tests assert both, using placeholder values on the never-resolving `.invalid` domain.
+- **Fail closed at every entry point.** The lifespan raises `SettingsError` before `init_db` runs. If startup is skipped, both read-only layers get `SettingsError` and return `503`; they never fall back to `local`.
+
+### Verification Results (Local)
+
+- `python -m pytest backend/tests/test_settings.py backend/tests/test_readonly.py -q` gave **146 passed, 0 failed**.
+- `python -m pytest backend/tests -q` gave **163 passed, 0 failed**, 1 warning (the existing `httpx` deprecation warning). Previously 132; 31 tests are new.
+- Mutation check: emptying the forbidden-variable list made **19** tests fail, as expected. Disabling the demo-URL requirement made **7** fail, as expected. `settings.py` was restored from a backup copy after each check.
+- `git diff` and `git status` reviewed: only the four files listed above changed.
+
+The full suite uses the existing isolated `careerpilot_test` database, as before. No new database access was added.
+
+### Verification Pending
+
+- GitHub Actions CI: **Not run** (not committed or pushed).
+- Docker Compose run: **Not run** (local-mode behavior and Compose configuration are unchanged).
+- Render behavior (whether linking a database injects `DATABASE_URL`, and secret environment-variable handling): **Unverified**.
+
+### Human Oversight
+
+The developer approved the Step 72A design and limited this step to settings validation. Claude Code did not read `.env`, change `database.py`, create database roles, seed data, deploy, commit, or push.
+
+### Remaining Deployment Blockers
+
+All blockers from Entry 004 still apply. For database-level protection specifically, the remaining Step 72A work is:
+
+- Mode-aware engine creation in `database.py` that uses `CAREERPILOT_DEMO_DATABASE_URL` in `public_demo`.
+- The SELECT-only role, read-only transactions on the connection, and a startup privilege check.
+- `public_demo` startup that skips `create_all`.
+- An admin bootstrap and insert-only seed tool, run from the developer's machine.
+- Database-level write-rejection tests against `careerpilot_test`.
+
+`public_demo` remains **NOT SAFE TO DEPLOY**.
+
+### Outcome
+
+A `public_demo` process now refuses to start unless it has a dedicated demo database URL and no owner or admin database URL. This is configuration groundwork only; the database itself is not yet read-only.

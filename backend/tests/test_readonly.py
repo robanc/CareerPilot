@@ -306,9 +306,29 @@ def test_every_write_route_has_require_writable(method):
 def test_settings_from_environment_when_startup_did_not_run(set_mode, monkeypatch):
     set_mode(None)
     monkeypatch.delenv("RENDER", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("CAREERPILOT_ADMIN_DATABASE_URL", raising=False)
     monkeypatch.setenv("CAREERPILOT_MODE", "public_demo")
+    # Placeholder only; settings validation never connects to it.
+    monkeypatch.setenv(
+        "CAREERPILOT_DEMO_DATABASE_URL",
+        "postgresql+psycopg://demo_reader:placeholder@db.invalid:5432/demo",
+    )
 
     assert_read_only(client.post("/applications", json=APPLICATION))
+
+
+def test_public_demo_database_misconfiguration_fails_closed(
+    set_mode, monkeypatch, db_must_not_be_used
+):
+    """A missing demo database URL returns 503 rather than falling back to local."""
+    set_mode(None)
+    monkeypatch.delenv("RENDER", raising=False)
+    monkeypatch.delenv("CAREERPILOT_DEMO_DATABASE_URL", raising=False)
+    monkeypatch.setenv("CAREERPILOT_MODE", "public_demo")
+
+    assert client.post("/applications", json=APPLICATION).status_code == 503
+    assert client.get("/applications").status_code == 503
 
 
 def test_invalid_mode_fails_closed(set_mode, monkeypatch, db_must_not_be_used):

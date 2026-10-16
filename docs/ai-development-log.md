@@ -542,3 +542,84 @@ The developer approved the Step 73A design and limited this step to code. Claude
 ### Outcome
 
 `public_demo` connections are now read-only with a 5-second statement timeout, and this is verified on every connection. `public_demo` startup never creates tables and fails closed if the schema is missing. Destructive test cleanup now requires the live database to be exactly `careerpilot_test`. Local mode is unchanged.
+
+## Entry 008 — Test-Reader Role Provisioning and Privilege Tests (Steps 73C–73C-10)
+
+**Date:** October 16, 2026
+**AI Coding Agent:** Claude Code (Claude Opus 5.5)
+**Development Method:** Human-supervised, agent-assisted implementation
+**Status:** Implemented and verified locally on branch `feature/render-readonly-demo`; awaiting developer review; not committed
+
+### Objective
+
+Provision a SELECT-only, NOLOGIN PostgreSQL role, `careerpilot_test_reader`, in `careerpilot_test`. Then prove with real-database tests that its privileges allow SELECT and reject writes.
+
+> **This tests role privileges, not a login security boundary.** The tests enter the role with `SET LOCAL ROLE` from the superuser test connection, so `session_user` stays the superuser, which could `RESET ROLE`. The public demo role, its login, and its containment are still pending. `public_demo` remains **NOT SAFE TO DEPLOY**.
+
+### Agent Workflow
+
+1. Claude Code reviewed and corrected the provisioning scripts `backend/tests/sql/01_test_reader_role.sql` and `02_test_reader_grants.sql`. It ran no SQL itself.
+   - Step 73C-5: the final `pg_shdepend` post-check skipped `dbid 0`, which hid grants on shared objects (databases, tablespaces, parameters). It was replaced with an allowlist: every reference to the reader must be an ACL entry, created by the script, in `careerpilot_test`. Claude Code also added default-privilege and grant-option checks.
+   - Step 73C-7: the developer's first run of script 02 failed before COMMIT with `"pg_statistic" is not a sequence`, so nothing was applied. SQL does not guarantee the order in which `WHERE` conditions are evaluated, so `has_sequence_privilege` was called on a non-sequence. The check now runs in a PL/pgSQL loop over rows already selected as sequences. A NULL result fails closed.
+2. **The developer provisioned the role** (Claude Code did not). Script 01 succeeded and the role attributes were verified. Script 02 then succeeded. The developer's independent privilege checks returned `t|t|f|f|f|f`: database identity, SELECT, write, TEMP, CREATE, and sequence access.
+3. Step 73C-9: Claude Code added automated tests, then ran mutation checks, the focused tests, and the full suite.
+4. Step 73C-10: Claude Code added a CI step that provisions the role before pytest. It did not run the step or the scripts locally.
+
+### Files Changed
+
+- `.github/workflows/ci.yml` — New step in the `backend-tests` job: **Provision careerpilot_test_reader role**.
+- `backend/tests/sql/01_test_reader_role.sql`, `backend/tests/sql/02_test_reader_grants.sql` — New provisioning scripts (corrected in Steps 73C-5 and 73C-7).
+- `backend/tests/test_test_reader_role.py` — New: 10 tests.
+- `docs/ai-development-log.md` — This entry.
+
+### Test Design
+
+- **Dedicated `NullPool` engine** on the test engine's URL, so a role-switched connection is never reused. It is disposed after each test.
+- **One connection, one transaction:** `require_test_database()` runs first. Next, a fixed query checks that the role exists, and the test fails with provisioning instructions if it does not. Then `SET LOCAL ROLE careerpilot_test_reader` runs, and `current_user` is checked. Every probe statement runs only after that, as the reader. The superuser session runs only these fixed checks, never application SQL.
+- **Always rolled back**, in a `finally`, including when a probe that should fail succeeds.
+- **Identity and attributes:** `current_database()` is `careerpilot_test`, `current_user` is the reader, and `session_user` is not. The role has none of the attributes `rolsuper`, `rolcanlogin`, `rolinherit`, `rolcreatedb`, `rolcreaterole`, `rolreplication`, or `rolbypassrls`. It has a connection limit of 0, no memberships, and no `pg_read_all_data`/`pg_write_all_data` membership.
+- **SELECT works** on a synthetic row seeded by the owner. The tables are recreated before every test, so this also exercises `ALTER DEFAULT PRIVILEGES`.
+- **Rejected with SQLSTATE `42501`**, each test in its own transaction: `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `CREATE TABLE`, `CREATE TEMP TABLE`, and `nextval` on the `job_applications` id sequence. After the rollback, the owner confirms that the row count is unchanged and that no probe table exists.
+- **No skips.** A missing role or a wrong privilege fails the test.
+
+### Verification Results (Local)
+
+- Focused: `python -m pytest backend/tests/test_test_reader_role.py -v` gave **10 passed**.
+- Full suite: `python -m pytest backend/tests -q` gave **242 passed, 0 failed**, 1 warning (the existing `httpx`/starlette deprecation warning). The 10 tests are new; the previous total was 232.
+- Mutation checks, each run on a temporary copy of the test file that was deleted afterwards:
+  - A nonexistent role name: 10 failed, each with the provisioning message.
+  - `SET LOCAL ROLE` and the `current_user` check removed: 9 failed (identity, attributes, and all 7 rejections). Only the SELECT test passed, as expected.
+  - Afterwards, `to_regclass('public.reader_probe')` on `careerpilot_test` was `NULL`, so the rollback held even when writes succeeded.
+
+### CI Provisioning (Step 73C-10)
+
+- **Placement:** the new step runs after **Create careerpilot_test database (idempotent)** and before **Run pytest**.
+- **How it runs:** it executes `01_test_reader_role.sql`, then `02_test_reader_grants.sql`, each with `psql -X -v ON_ERROR_STOP=1 -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d careerpilot_test -f backend/tests/sql/<script>`.
+- **No `--single-transaction`:** the scripts have their own `BEGIN`/`COMMIT`.
+- **Credentials:** the step uses the existing CI service credentials (`careerpilot_ci`, which is the service superuser, and `PGPASSWORD` from the job `env`). It adds no secrets and prints no passwords.
+- **Fail fast:** `set -eu` and `ON_ERROR_STOP` stop the step at the first error. A failed step skips **Run pytest**, so the job fails.
+- **Why the scripts' pre-checks hold in CI:** `createdb` runs as `careerpilot_ci`, so it owns `careerpilot_test`. The database is empty, so script 02's ownership checks pass, `GRANT ... ON ALL TABLES` grants nothing, and the default privileges cover the tables pytest creates as `careerpilot_ci`.
+- **No other changes:** the other steps and jobs are unchanged.
+- **Local checks only:** the workflow parsed with PyYAML (`yaml.safe_load`), and the step order was confirmed. The diff was reviewed. `actionlint` is not installed, so it was not run.
+
+### Verification Pending
+
+- **The CI provisioning step has NOT been executed.** Nothing is committed or pushed, so GitHub Actions has not run. Everything in "Verification Results (Local)" ran only on the developer's machine, against a role the developer provisioned by hand.
+- **The SQL scripts are untracked.** `backend/tests/sql/` must be committed together with the workflow change, or the step fails because the files are missing.
+- **Expected in the first CI run:** the provisioning step succeeds, and pytest reports 242 passed. This is not yet confirmed.
+
+### Human Oversight
+
+The developer ran both provisioning scripts and the independent privilege checks. Claude Code did not create or alter roles, change grants, run the provisioning SQL (locally or through the new CI step), read `.env`, connect to the development database, commit, push, or deploy. Its only database connections were to `careerpilot_test`, through the existing test credentials.
+
+### Remaining Deployment Blockers
+
+- The public demo login role, with its own credentials and real login containment, plus a startup privilege check that it cannot write.
+- A successful GitHub Actions run of the new CI provisioning step and the full suite.
+- The items still open from Entry 007: the admin bootstrap and insert-only seed tool, rate limiting, resume input limits, and synthetic-data safeguards.
+
+`public_demo` remains **NOT SAFE TO DEPLOY**.
+
+### Outcome
+
+`careerpilot_test_reader` is provisioned locally. Automated tests now prove, against real PostgreSQL 16, that it can SELECT and that PostgreSQL rejects every tested write, DDL, TEMP, and sequence operation with `42501`.

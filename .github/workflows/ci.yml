@@ -69,6 +69,18 @@ jobs:
           psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d careerpilot_test \
             -v ON_ERROR_STOP=1 -tAc "SELECT current_database()"
 
+      # SELECT-only NOLOGIN role used by backend/tests/test_test_reader_role.py.
+      # Runs as POSTGRES_USER (the service superuser, which owns
+      # careerpilot_test), as the scripts require. Each script has its own
+      # BEGIN/COMMIT, so no --single-transaction. Any error stops the step.
+      - name: Provision careerpilot_test_reader role
+        run: |
+          set -eu
+          for script in 01_test_reader_role.sql 02_test_reader_grants.sql; do
+            psql -X -v ON_ERROR_STOP=1 -h "$POSTGRES_HOST" -U "$POSTGRES_USER" \
+              -d careerpilot_test -f "backend/tests/sql/$script"
+          done
+
       # Run from the repository root with "python -m" so the "backend"
       # package is importable (there is no backend/__init__.py).
       - name: Run pytest

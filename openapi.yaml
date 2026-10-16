@@ -76,6 +76,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Application'
+        '403':
+          $ref: '#/components/responses/ReadOnly'
         '422':
           $ref: '#/components/responses/ValidationError'
 
@@ -121,6 +123,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Application'
+        '403':
+          $ref: '#/components/responses/ReadOnly'
         '404':
           $ref: '#/components/responses/NotFound'
         '422':
@@ -133,6 +137,8 @@ paths:
       responses:
         '204':
           description: Application deleted
+        '403':
+          $ref: '#/components/responses/ReadOnly'
         '404':
           $ref: '#/components/responses/NotFound'
         '422':
@@ -346,6 +352,16 @@ components:
           type: string
 
   responses:
+    ReadOnly:
+      description: |
+        The server is running in read-only public_demo mode
+        (CAREERPILOT_MODE=public_demo). Writes are disabled; in local
+        mode this response is never returned.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
     NotFound:
       description: Requested application was not found
       content:

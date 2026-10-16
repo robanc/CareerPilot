@@ -206,3 +206,103 @@ Claude Code did not read `.env`, create cloud resources, deploy, commit, or push
 ### Outcome
 
 CareerPilot's backend now has a validated operating mode that defaults to `local` and refuses to start on a detected Render host unless `public_demo` is set explicitly. The `public_demo` mode is a placeholder until the read-only safeguards are built.
+
+## Entry 004 — Read-Only HTTP Protection for `public_demo`
+
+**Date:** October 16, 2026
+**AI Coding Agent:** Claude Code (Claude Opus 5.5)
+**Development Method:** Human-supervised, agent-assisted implementation
+**Status:** Implemented and verified locally on branch `feature/render-readonly-demo`; awaiting developer review; not committed
+
+### Objective
+
+Make `public_demo` mode reject all write requests at the FastAPI backend, while keeping full CRUD in `local` mode.
+
+Database read-only transactions, demo seeding, rate limiting, frontend changes, and Render deployment configuration are explicitly out of scope.
+
+### Agent Workflow
+
+1. The developer supplied a scoped prompt: a fail-closed method allowlist, an independent route dependency, bypass-resistance, focused tests, and documentation. It prohibited reading `.env`, deploying, committing, or pushing.
+2. Claude Code read `CLAUDE.md`, `AGENTS.md`, `backend/app/settings.py`, `backend/app/main.py`, the routers, `frontend/nginx.conf`, `openapi.yaml`, and the existing tests before editing.
+3. Claude Code implemented two independent protection layers and added tests.
+4. Claude Code ran the full backend suite, then mutation-checked each layer by disabling it and confirming that tests fail.
+5. Claude Code reviewed the diff and reported results for developer review.
+
+### Files Changed
+
+- `backend/app/readonly.py` — New. `ReadOnlyMiddleware` (pure ASGI method allowlist), `require_writable` dependency, `is_request_allowed()`, and `current_settings()`.
+- `backend/app/main.py` — Registers `ReadOnlyMiddleware` directly inside `CORSMiddleware` (see the CORS correction below) and updates the `public_demo` startup warning.
+- `backend/app/routers/applications.py` — Adds `dependencies=[Depends(require_writable)]` to the create, update, and delete endpoints.
+- `backend/app/settings.py` — Updates the `public_demo` warning in the module docstring.
+- `openapi.yaml` — Documents a `403` `ReadOnly` response on `POST /applications`, `PATCH /applications/{id}`, and `DELETE /applications/{id}`.
+- `backend/tests/test_readonly.py` — New. 94 tests: 71 in the initial implementation and 23 added by the CORS correction.
+- `docs/ai-development-log.md` — This entry.
+
+### Design and Safety Decisions
+
+- **Fail-closed allowlist, not a blocklist.** In `public_demo`, only `GET`, `HEAD`, and `OPTIONS` pass, plus `POST` to exactly `/resume/match`. Everything else, including `PUT`, `TRACE`, WebDAV methods, and unknown paths, returns `403` with `{"detail": "CareerPilot is running as a read-only public demo; ..."}`.
+- **Runs before routing.** The check runs before routing, body parsing, and any database session. A malformed body on a blocked route gets `403`, not `422`. Only `CORSMiddleware` wraps it (see the CORS correction below).
+- **Exact path and method matching.** The allowed POST path is compared exactly against the ASGI `scope["path"]`. `/resume/match/`, `//resume/match`, `/resume//match`, `/resume/match%2F`, and case variants are blocked instead of being redirected or normalized. Methods are case-sensitive, so `post` is blocked.
+- **Headers are never consulted.** Only the method and path received by the server are used. Neither FastAPI nor Starlette implements method-override headers, and the tests confirm that `X-HTTP-Method-Override`, `X-HTTP-Method`, `X-Method-Override`, `X-Original-Method`, `X-Forwarded-Method`, `X-Original-URL`, `X-Rewrite-URL`, `X-Forwarded-Prefix`, `Forwarded`, and similar headers neither unlock writes nor turn a `GET` into a write. The `_method` query parameter is also ignored.
+- **Independent second layer.** `require_writable` runs before `get_db` on every application write endpoint, so writes stay blocked even if the middleware is removed or reordered. A test mounts the applications router on a bare app with no middleware to prove this.
+- **Settings resolution.** Both layers read `app.state.settings` (set at startup). If startup has not run (as with `TestClient(app)` without `with`), settings are read from the environment on every request rather than cached. An invalid `CAREERPILOT_MODE` returns `503` instead of falling back to `local`.
+- **WebSockets are refused** in `public_demo` (no WebSocket endpoints exist).
+
+### Correction: CORS Handling for a Cross-Origin Frontend
+
+**Follow-up prompt:** The developer noted that the planned production setup is a Render Static Site for the React frontend plus a separate Render FastAPI web service, so browser requests are cross-origin. The developer asked Claude Code to make read-only `403` responses carry correct CORS headers without weakening the allowlist.
+
+**Problem found:** As first implemented, `ReadOnlyMiddleware` was the outermost layer, so its `403` responses never passed through `CORSMiddleware`. A browser on an allowed origin would see an opaque CORS failure instead of the read-only message.
+
+**Change:** In `backend/app/main.py`, the registration order is swapped, so `CORSMiddleware` is now the outermost layer and `ReadOnlyMiddleware` sits directly inside it. Nothing else changed: the allowlist, `require_writable`, the allowed origins, methods, and headers are all the same.
+
+**Why this keeps the allowlist fail-closed:**
+
+- `CORSMiddleware` answers preflights (an `OPTIONS` request carrying both `Origin` and `Access-Control-Request-Method`) itself, without calling the app. `OPTIONS` is on the read-only allowlist anyway.
+- Every other request is passed unchanged to `ReadOnlyMiddleware`. `CORSMiddleware` only adds response headers and never alters the method or path.
+- **CORS is not authorization.** A successful preflight for `PATCH` or `DELETE` only lets the browser send the request, and that request is still refused with `403`. A disallowed origin gets no `Access-Control-Allow-Origin` header, so the browser cannot read the response. Its writes are refused as well, so CORS is never what blocks a write.
+- Preflights that request headers outside `Content-Type` (for example `X-HTTP-Method-Override`) or the method `PUT` are rejected with `400`.
+
+**Origins:** These are unchanged: `http://localhost:5173` and `http://127.0.0.1:5173` (the Vite dev server). There are no wildcards or regexes, and credentials stay disabled. The Docker Compose frontend on port 8080 is same-origin through the nginx `/api/` proxy and needs no CORS. **Production origins are not configured yet.** The plan for a later step is to read an explicit, comma-separated list of exact origins (for example the Render Static Site URL) from an environment variable set in the Render service configuration. Wildcards and `null` must be rejected, and the local origins should stay the default only in `local` mode. Until then, a deployed static site would be refused by CORS, which fails closed.
+
+### Verification Results (Local)
+
+- Initial implementation: `python -m pytest backend/tests -q` gave **109 passed, 0 failed**: 38 existing and 71 new read-only tests.
+- After the CORS correction: `python -m pytest backend/tests -q` gave **132 passed, 0 failed**, 1 warning (the existing `httpx` deprecation warning)
+  - Previous tests preserved: **109 passed**
+  - New CORS tests: **23 passed**. They cover allowed-origin `GET` for both local origins, blocked `POST`/`PATCH`/`PUT`/`DELETE` returning `403` with `Access-Control-Allow-Origin`, allowed-origin `POST /resume/match`, preflights that succeed while the write is still `403`, preflights rejected for `PUT` and for the `X-HTTP-Method-Override`/`X-Original-URL`/`Authorization` headers, four disallowed origins (no CORS headers, preflight `400`, writes still `403`), and local-mode CRUD from an allowed origin.
+- Mutation check, middleware disabled (allowlist forced to allow everything): **31 of 71** read-only tests failed, as expected.
+- Mutation check, `require_writable` removed from the three routes (temporary source edit, restored afterward): **6 of 71** failed, namely the three router-only tests and the three route-coverage tests, as expected.
+- Mutation check, old middleware order restored temporarily (`ReadOnlyMiddleware` outermost): **8 of 132** failed, all of them the "blocked write returns 403 with CORS headers" tests, as expected. Restored afterward.
+- `openapi.yaml` parses as valid YAML.
+- `git diff` and `git status` reviewed: only the files listed above changed.
+
+### Verification Pending
+
+- Docker Compose run in `public_demo` mode through nginx: **Not run**.
+- Frontend lint, build, and behavior in `public_demo`: **Not run** (no frontend changes; the UI will show errors for blocked writes).
+- GitHub Actions CI: **Not run** (changes are not committed or pushed).
+
+### Human Oversight
+
+The developer defined the scope and safety constraints before implementation and requested review before any commit.
+
+Claude Code did not read `.env`, deploy, commit, or push.
+
+### Remaining Deployment Blockers
+
+`public_demo` is still **NOT SAFE TO DEPLOY**. Before any public deployment:
+
+- **Resume input is unrestricted.** `POST /resume/match` is allowlisted but has no request size limit, input limits, or abuse protection. It is not yet safe to expose.
+- **No database-level protection.** The database user can still write. Read-only transactions or a read-only database role are needed as a further layer.
+- **No rate limiting.**
+- **No synthetic demo data.** No seeding exists, and nothing prevents a demo instance from pointing at a database with real job-search records.
+- **Render detection is unverified** (see Entry 003). Set `CAREERPILOT_MODE=public_demo` explicitly in the service configuration.
+- **No Render configuration or frontend read-only UX** yet.
+- **Production CORS origins are not configured.** Only the local Vite origins are allowed; see the CORS correction above for the planned environment-variable configuration.
+- **`root_path` caveat.** If the backend is later served with a non-empty ASGI `root_path` (for example `uvicorn --root-path`), the exact-path check would block `/resume/match` too. That fails closed, but it would need adjusting. The current nginx setup strips `/api/`, so the backend sees `/resume/match`.
+- **`HEAD` and `OPTIONS` are passed to the router.** They are safe today because no handler writes on them; any future handler for those methods must stay read-only.
+
+### Outcome
+
+In `public_demo` mode, the backend now rejects every request outside a narrow read-only allowlist, using two independent layers. `local` mode keeps full CRUD. The demo is still not deployable until the blockers above are resolved.

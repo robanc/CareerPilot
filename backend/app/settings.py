@@ -6,10 +6,10 @@ CareerPilot runs in exactly one of two modes, selected by CAREERPILOT_MODE:
   access. This is what Docker Compose and the test suite use.
 - ``public_demo``: a publicly reachable demonstration instance.
 
-WARNING: public_demo is NOT SAFE TO DEPLOY yet. Selecting it currently changes
-nothing about request handling: there are no backend write restrictions,
-database restrictions, rate limiting, or synthetic-data safeguards. Do not
-expose a public_demo instance until those are implemented and tested.
+WARNING: public_demo is NOT SAFE TO DEPLOY yet. It blocks HTTP writes (see
+readonly.py), but there are no database restrictions, rate limiting, resume
+input limits, or synthetic-data safeguards. Do not expose a public_demo
+instance until those are implemented and tested.
 
 Render fail-closed rule: when the process appears to run on Render, startup is
 refused unless CAREERPILOT_MODE is explicitly ``public_demo``, so a hosted

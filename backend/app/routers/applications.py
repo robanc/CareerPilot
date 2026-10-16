@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
 from backend.app.models import JobApplication
+from backend.app.readonly import require_writable
 from backend.app.schemas import (
     ApplicationCreate,
     ApplicationUpdate,
@@ -24,6 +25,7 @@ router = APIRouter(
     "",
     response_model=ApplicationResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_writable)],
 )
 def create_application(
     application: ApplicationCreate,
@@ -104,6 +106,7 @@ def get_application(
 @router.patch(
     "/{id}",
     response_model=ApplicationResponse,
+    dependencies=[Depends(require_writable)],
 )
 def update_application(
     id: int,
@@ -141,6 +144,7 @@ def update_application(
 @router.delete(
     "/{id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_writable)],
 )
 def delete_application(
     id: int,

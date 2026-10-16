@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 
 from backend.app.database import init_db
+from backend.app.readonly import ReadOnlyMiddleware
 from backend.app.routers.applications import router as applications_router
 from backend.app.routers.dashboard import router as dashboard_router
 from backend.app.routers.resume import router as resume_router
@@ -23,8 +24,10 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     if settings.is_public_demo:
         logger.warning(
-            "CAREERPILOT_MODE=public_demo: write restrictions are NOT "
-            "implemented yet; this instance is NOT SAFE TO EXPOSE publicly."
+            "CAREERPILOT_MODE=public_demo: HTTP write requests are blocked, "
+            "but database restrictions, rate limiting, and resume input "
+            "limits are NOT implemented; this instance is NOT SAFE TO "
+            "EXPOSE publicly."
         )
 
     # Create missing tables so a fresh deployment has a usable schema.
@@ -40,6 +43,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+# Middleware order: the last one added is the outermost. CORSMiddleware wraps
+# ReadOnlyMiddleware so that read-only 403 responses carry CORS headers for
+# allowed origins and the cross-origin frontend can read the message.
+# CORS is not authorization: preflights are answered by CORSMiddleware
+# without reaching the app, and every actual request still passes through
+# ReadOnlyMiddleware before routing or any handler runs.
+app.add_middleware(ReadOnlyMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

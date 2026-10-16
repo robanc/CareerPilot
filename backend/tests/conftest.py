@@ -3,12 +3,14 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.app.database import Base, DATABASE_URL, get_db
+from backend.app.database import Base, get_db, local_database_url, reset_engine
 from backend.app.main import app
 import backend.app.models  # Register database models
 
 
-TEST_DATABASE_URL = DATABASE_URL.set(
+# Built from the local POSTGRES_* settings, with the database name forced to
+# careerpilot_test. Tests never use the app's lazily created engine.
+TEST_DATABASE_URL = local_database_url().set(
     database="careerpilot_test"
 )
 
@@ -53,4 +55,6 @@ def use_test_database():
         yield
     finally:
         app.dependency_overrides.pop(get_db, None)
+        # Drop any engine a test built, so none leaks into the next test.
+        reset_engine()
 

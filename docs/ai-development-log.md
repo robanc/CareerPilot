@@ -376,3 +376,83 @@ All blockers from Entry 004 still apply. For database-level protection specifica
 ### Outcome
 
 A `public_demo` process now refuses to start unless it has a dedicated demo database URL and no owner or admin database URL. This is configuration groundwork only; the database itself is not yet read-only.
+
+## Entry 006 — Mode-Aware Lazy Database Engine (Step 72F)
+
+**Date:** October 16, 2026
+**AI Coding Agent:** Claude Code (Claude Opus 5.5)
+**Development Method:** Human-supervised, agent-assisted implementation
+**Status:** Implemented and verified locally on branch `feature/render-readonly-demo`; awaiting developer review; not committed
+
+### Objective
+
+Make `backend/app/database.py` choose its connection by operating mode, and create the engine lazily instead of at import. This is the next increment of the Step 72A design, following the settings validation in Entry 005.
+
+> **Database-level read-only enforcement is NOT implemented yet.** This step only controls *which* credentials the backend connects with. No PostgreSQL role has been created, no grants have been changed, read-only transactions are not set on the connection, and there is no startup privilege check. If `CAREERPILOT_DEMO_DATABASE_URL` held owner credentials, the database would still accept writes. `public_demo` remains **NOT SAFE TO DEPLOY**.
+
+### Agent Workflow
+
+1. The developer's Step 72F prompt limited the work to mode-aware, lazy engine and session configuration. It prohibited creating database roles, changing grants, seeding, changing Docker Compose, deploying, committing, pushing, reading `.env`, and running tests against any non-test database.
+2. Claude Code read `CLAUDE.md`, `AGENTS.md`, `database.py`, `settings.py`, `main.py`, `readonly.py` (state lookup only), `conftest.py`, and the existing database, settings, and read-only tests.
+3. Claude Code implemented the change, added tests, ran mutation checks, ran the focused and full backend suites, and reviewed the diff.
+
+### Files Changed
+
+- `backend/app/database.py` — Removes the import-time `DATABASE_URL`, `engine`, and `SessionLocal`. Adds `local_database_url()` (POSTGRES_*, same defaults as before), `public_demo_database_url()` (parses and validates the demo URL), `database_url_for()`, `create_engine_for()`, and the lazy accessors `get_engine()`, `get_session_factory()`, and `reset_engine()`. `get_db()` and `init_db()` now use the lazy engine.
+- `backend/app/settings.py` — Docstring only: no longer says `database.py` uses POSTGRES_* in `public_demo`.
+- `backend/tests/conftest.py` — Builds the test URL with `local_database_url()` instead of the removed `DATABASE_URL` constant. The database name is still forced to `careerpilot_test` and the existing guard assertion is unchanged. Resets the lazy engine after each test.
+- `backend/tests/test_database_engine.py` — New: 28 tests.
+- `docs/ai-development-log.md` — This entry.
+
+### Design and Safety Decisions
+
+- **No engine at import.** Importing `database.py` or the app builds no engine. The first `get_engine()` call (from `init_db()` at startup, or `get_db()` on a request) builds it. `create_engine` does not connect; the first connection happens when a session or `create_all` uses it.
+- **`local` mode is unchanged.** It uses the same POSTGRES_* variables, the `127.0.0.1:5432` defaults, `postgresql+psycopg`, `pool_pre_ping=True`, and `autoflush=False`. One engine and one session factory are reused. A missing `POSTGRES_USER`, `POSTGRES_PASSWORD`, or `POSTGRES_DB` now raises a `SettingsError` that names the variable when the engine is first needed, instead of a `KeyError` at import.
+- **`public_demo` uses only `Settings.demo_database_url`.** POSTGRES_* are ignored even when set, and are not required. There is no fallback path: when settings validation fails (a missing demo URL, or `DATABASE_URL` / `CAREERPILOT_ADMIN_DATABASE_URL` present), no engine is created.
+- **Demo URL validation (fail closed).** The URL must parse, use `postgresql://` or `postgresql+psycopg://` (it is normalized to `postgresql+psycopg`), and include a username, host, and database name. Query options such as `sslmode` are kept. Other drivers, such as SQLite, MySQL, and asyncpg, are rejected.
+- **No credential leakage.** Error messages name `CAREERPILOT_DEMO_DATABASE_URL` but never include its value. The SQLAlchemy parser error is suppressed with `from None`, because its message can quote the raw URL.
+- **Engine always matches current settings.** Settings are re-read on each `get_engine()` call. If they differ from the cached engine's, the engine is disposed and replaced, so a `public_demo` process can never reuse an engine built in `local` mode. Settings validation runs first on every call, so a configuration that became invalid fails immediately.
+- **Not addressed here.** `init_db()` still runs `create_all` at startup in `public_demo`, now through the demo URL. Skipping it in `public_demo` is a planned Step 72A item. The tool cannot detect whether the demo URL actually holds owner credentials; that requires the role and privilege check.
+
+### Test Isolation
+
+- All new tests use placeholder URLs on the never-resolving `.invalid` domain and never open a connection. The only real database the suite touches is still `careerpilot_test`, through the existing `conftest.py` engine and guard.
+- The import test runs in a separate interpreter with `sqlalchemy.create_engine` replaced by a function that exits the process, then confirms that importing the app in `public_demo` creates no engine.
+- **Correction during development:** the first full-suite run had 1 failure (`test_init_db_preserves_existing_rows` got `403` instead of `201`). The new startup test runs the lifespan in `public_demo`. The lifespan stores `public_demo` settings on `app.state` before `init_db` fails, and those settings stayed in place, so later tests became read-only. The test now restores `app.state.settings` afterwards. The application code was not changed for this.
+
+### Verification Results (Local)
+
+- `python -m pytest backend/tests/test_database_engine.py -q` gave **28 passed, 0 failed**.
+- `python -m pytest backend/tests -q` gave **191 passed, 0 failed**, 1 warning (the existing `httpx` deprecation warning). Previously 163; 28 tests are new.
+- Mutation checks (`database.py` restored from a backup copy after each one, and the restore confirmed with `cmp`):
+  - Building an engine at import made the import test fail.
+  - Using POSTGRES_* in `public_demo` made 15 tests fail.
+  - Caching the first engine regardless of mode made the mode-switch test fail.
+  - Chaining the parser error (removing `from None`) made 2 tests fail.
+- `git diff` and `git status` reviewed: only the five files listed above changed.
+
+### Verification Pending
+
+- GitHub Actions CI: **Not run** (not committed or pushed).
+- Docker Compose run: **Not run** (Compose is unchanged; local mode uses the same variables).
+- Connecting with a real demo role: **Not done** (no role exists yet).
+
+### Human Oversight
+
+The developer limited this step to engine and session selection. Claude Code did not read `.env`, create database roles, change grants, seed data, change Docker Compose, deploy, commit, or push.
+
+### Remaining Deployment Blockers
+
+All blockers from Entries 004 and 005 still apply, except mode-aware engine creation. The remaining Step 72A database work is:
+
+- The SELECT-only PostgreSQL role and its grants.
+- Read-only transactions on `public_demo` connections, and a startup privilege check.
+- `public_demo` startup that skips `create_all`.
+- An admin bootstrap and insert-only seed tool, run from the developer's machine.
+- Database-level write-rejection tests against `careerpilot_test`.
+
+`public_demo` remains **NOT SAFE TO DEPLOY**.
+
+### Outcome
+
+The backend now creates its database engine lazily. In `local` mode it connects with POSTGRES_* exactly as before. In `public_demo` it connects only with the validated `CAREERPILOT_DEMO_DATABASE_URL` and fails closed otherwise. The database itself is not yet read-only.

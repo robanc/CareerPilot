@@ -16,9 +16,10 @@ non-empty CAREERPILOT_DEMO_DATABASE_URL, intended to hold the credentials of
 a SELECT-only database role. Startup is refused if DATABASE_URL or
 CAREERPILOT_ADMIN_DATABASE_URL is present at all (even empty), so owner or
 administrative credentials -- for example a connection string injected by
-linking a Render database -- never reach the public API process. Nothing
-connects with CAREERPILOT_DEMO_DATABASE_URL yet: database.py still uses
-POSTGRES_*, and database-level read-only enforcement is NOT implemented.
+linking a Render database -- never reach the public API process. database.py
+connects with CAREERPILOT_DEMO_DATABASE_URL only (never POSTGRES_*) and
+validates its format, but database-level read-only enforcement (role
+privileges, read-only transactions) is NOT implemented.
 Error messages name these variables but never include their values.
 
 Render fail-closed rule: when the process appears to run on Render, startup is

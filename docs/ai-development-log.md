@@ -60,7 +60,7 @@ This entry documents the first Claude Code implementation task in the CareerPilo
 **Date:** October 16, 2026
 **AI Coding Agent:** Claude Code (Claude Opus 5.5)
 **Development Method:** Human-supervised, agent-assisted implementation
-**Status:** Implemented and verified locally; pending Git commit and first GitHub Actions run
+**Status:** Implemented, verified locally, merged into `main` through pull request #1 (merge commit `323acd4`), and passing on GitHub Actions
 
 ### Objective
 
@@ -107,14 +107,25 @@ Add an initial continuous integration pipeline that runs backend tests against P
 - Backend and frontend `docker build`: **Successful**
 - `CLAUDE.md` commands and architecture details: **Checked against the current repository files and the local results above**
 
+### Verification Results (GitHub Actions)
+
+Confirmed by the developer from GitHub. Workflow: <https://github.com/robanc/CareerPilot/actions/workflows/ci.yml>
+
+- Pull request CI run #1 (pull request #1): **Passed all three jobs**
+  - `backend-tests` (backend tests against the CI PostgreSQL 16 service): **Passed**
+  - `frontend` (lint and build): **Passed**
+  - `docker-build` (backend and frontend images): **Passed**
+- Pull request #1 merged into `main`: **Merged** (merge commit `323acd4`)
+- Post-merge CI run #2 on `main`: **Completed successfully**
+
 ### Verification Pending
 
-- First GitHub Actions run on a pull request to `main`: **Not yet run**
-- Full backend test execution against the CI PostgreSQL 16 service: **Not yet run**
+- Per-test results from the GitHub-hosted backend job (for example, the number of tests passed): **Not recorded in this log**; the developer confirmed job-level success only.
+- Manual `workflow_dispatch` trigger: **Not yet run**
 
 ### Human Oversight
 
-The developer approved the plan and its decisions before implementation and will review the diff before committing.
+The developer approved the plan and its decisions before implementation, reviewed the diff before committing, merged pull request #1, and confirmed the GitHub Actions results.
 
 Claude Code did not commit or push changes without approval.
 
@@ -127,4 +138,4 @@ Claude Code did not commit or push changes without approval.
 
 ### Outcome
 
-CareerPilot has an initial GitHub Actions CI pipeline that has been validated locally. GitHub-hosted execution remains to be confirmed.
+CareerPilot has an initial GitHub Actions CI pipeline that has been validated locally and confirmed on GitHub-hosted runners: pull request CI run #1 passed all three jobs, and post-merge CI run #2 on `main` completed successfully.

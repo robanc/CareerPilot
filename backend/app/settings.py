@@ -7,10 +7,11 @@ CareerPilot runs in exactly one of two modes, selected by CAREERPILOT_MODE:
 - ``public_demo``: a publicly reachable demonstration instance.
 
 WARNING: public_demo is NOT SAFE TO DEPLOY yet. It blocks HTTP writes (see
-readonly.py) and uses read-only database sessions (database.py), but there
-is no SELECT-only database role, rate limiting, resume input limits, or
-synthetic-data safeguards. Do not expose a public_demo instance until those
-are implemented and tested.
+readonly.py), uses read-only database sessions, and at startup refuses a
+database role that is not strictly SELECT-only (database.py), but the
+SELECT-only demo role is not provisioned, and there is no rate limiting,
+resume input limits, or synthetic-data safeguards. Do not expose a
+public_demo instance until those are implemented and tested.
 
 public_demo database configuration (settings-level only): startup requires a
 non-empty CAREERPILOT_DEMO_DATABASE_URL, intended to hold the credentials of
@@ -20,8 +21,10 @@ administrative credentials -- for example a connection string injected by
 linking a Render database -- never reach the public API process. database.py
 connects with CAREERPILOT_DEMO_DATABASE_URL only (never POSTGRES_*) and
 validates its format, and makes those sessions read-only with a short
-statement timeout. The SELECT-only role and its privileges, the actual
-database-level boundary, are NOT implemented.
+statement timeout. The demo role's actual privileges are the
+database-level security boundary (the read-only session is
+defense-in-depth): startup verifies them through the demo connection and
+fails closed, but the role itself is NOT provisioned yet.
 Error messages name these variables but never include their values.
 
 Render fail-closed rule: when the process appears to run on Render, startup is

@@ -373,6 +373,8 @@ def test_public_demo_startup_verifies_schema_without_create_all(
     public_demo_env, monkeypatch, create_all_must_not_run, restore_app_settings
 ):
     calls = install_inspector(monkeypatch)
+    # The privilege check is covered in test_demo_role_privileges.py.
+    monkeypatch.setattr(main_module, "verify_demo_role_privileges", lambda: None)
 
     with TestClient(main_module.app) as client:
         assert client.get("/health").status_code == 200

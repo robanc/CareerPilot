@@ -623,3 +623,95 @@ The developer ran both provisioning scripts and the independent privilege checks
 ### Outcome
 
 `careerpilot_test_reader` is provisioned locally. Automated tests now prove, against real PostgreSQL 16, that it can SELECT and that PostgreSQL rejects every tested write, DDL, TEMP, and sequence operation with `42501`.
+
+## Entry 009 — public_demo Startup Privilege Verification (Step 73D-1)
+
+**Date:** October 16, 2026
+**AI Coding Agent:** Claude Code (Claude Opus 5.5)
+**Development Method:** Human-supervised, agent-assisted implementation
+**Status:** Implemented and verified locally on branch `feature/render-readonly-demo`; awaiting developer review; not committed
+
+#### Manual security review follow-up
+
+- Reviewed the startup privilege verification and PostgreSQL catalog queries.
+- Strengthened `DEMO_COLUMN_GRANTS_QUERY` to use effective PostgreSQL column privilege checks across relations.
+- Added a narrow exception for PostgreSQL's built-in `pg_catalog.pg_settings` UPDATE privilege.
+- Added a regression test protecting the exception and other column privilege checks.
+- Verified against the existing PostgreSQL 16 test reader.
+- Final validation: 314 backend tests passed, 1 existing deprecation warning.
+- No database roles, grants, credentials, or deployment configuration were modified.
+- `public_demo` remains NOT SAFE TO DEPLOY.
+
+### Objective
+
+Phase 1 of the approved Step 73D design: at `public_demo` startup, verify through the configured demo connection itself that the connected role is strictly SELECT-only, and refuse to start otherwise. Phases 2–5 (the LOGIN test role, Render provisioning scripts, bootstrap and seed, and deployment) were not started.
+
+> **The demo role's actual privileges are the security boundary.** The read-only session settings are defense-in-depth, because a client can `SET` them off. This step only *verifies* privileges. No demo LOGIN role exists yet, and `public_demo` remains **NOT SAFE TO DEPLOY**.
+
+### Files Changed
+
+- `backend/app/database.py`:
+  - Adds `DemoPrivilegeError`, `demo_privilege_problems(connection)`, and `verify_demo_role_privileges()`. The queries are named constants.
+  - The `public_demo` engine now has a small, provisional pool: `pool_size=2`, `max_overflow=1`, `pool_timeout=10`, `pool_recycle=1800`.
+  - Module docstring updated.
+- `backend/app/main.py` — `public_demo` startup now calls `verify_demo_role_privileges()` after `verify_schema()`, and the startup warning is updated. Local startup is unchanged.
+- `backend/app/settings.py` — Docstring only.
+- `backend/tests/test_demo_role_privileges.py` — New: 71 tests.
+- `backend/tests/test_database_readonly_session.py` — **Outside the step's listed scope; one-line change.** `test_public_demo_startup_verifies_schema_without_create_all` now stubs the new check. Without the stub, startup tries to connect to the placeholder `demo-db.invalid` host and the test fails.
+- `docs/ai-development-log.md` — This entry.
+
+### What the Check Verifies
+
+It runs on the demo engine from `get_engine()`, never on an owner or superuser connection. It uses only `SELECT` statements against catalogs and privilege functions: no test writes, DDL, `SET ROLE`, or grants.
+
+- **Identity:** `session_user = current_user`. The role has none of SUPERUSER, CREATEDB, CREATEROLE, REPLICATION, or BYPASSRLS, and it is not a member of any role.
+- **Ownership:** it owns no database, schema, or relation. A count from `pg_shdepend` also catches owned objects of any type in any database.
+- **Database:** it has neither `CREATE` nor `TEMPORARY`.
+- **Schemas:** it has `CREATE` on none. It has `USAGE` on each schema the application tables use.
+- **Application tables:** it has `SELECT`. It has none of `SELECT WITH GRANT OPTION`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, or `TRIGGER`. Column-level grants are checked too, through `has_any_column_privilege`.
+- **Every relation in the database:** no write privilege or grant option at table level, and no column-level grant other than plain SELECT, whether granted to the role or to PUBLIC.
+- **Sequences:** the sequences are listed first, and then `has_sequence_privilege` is called once per sequence, so it never runs against a non-sequence (the Step 73C-7 evaluation-order bug). Any `USAGE`, `SELECT`, or `UPDATE` fails the check.
+- **Fail closed:** any value other than an explicit `false` (including `NULL`) counts as granted. All problems are reported together in one `DemoPrivilegeError`. Long lists are truncated.
+- **No secrets in error messages:** messages never include the URL, host, password, the connected role's name, or the current database's name, which is shown as `(current)`.
+- **Retries:** connection errors are retried as in `verify_schema`.
+- **Checked once at startup:** grants changed afterwards are not detected until the next restart.
+
+### Finding From the Real-Database Test
+
+The first run as the NOLOGIN test reader flagged `pg_catalog.pg_settings`. PostgreSQL grants `UPDATE` on that view to PUBLIC by default, and updating it is equivalent to `SET` for the current session. That is exactly that one privilege on exactly that view, so it is now exempted, and every other privilege on `pg_settings` is still checked. A test pins this down.
+
+### Verification Results (Local)
+
+- Focused: `python -m pytest backend/tests/test_demo_role_privileges.py -q` gave **71 passed**.
+  - 69 tests use fake connections. They cover a negative case for every role attribute, membership, each ownership kind, database `CREATE`/`TEMPORARY`, schema `CREATE`/`USAGE`, each table-level and column-level privilege, the any-relation and column-ACL sweeps, and each sequence privilege. They also cover `NULL` failing closed, retries, no secrets in messages, the startup order (schema, then privileges), startup refusal, local startup skipping the check, and the pool settings.
+  - 2 tests run on real PostgreSQL 16 in `careerpilot_test`:
+    - As `careerpilot_test_reader` via `SET LOCAL ROLE` (in the test only, always rolled back), the check reports exactly one problem: the `SET ROLE` detection.
+    - With the owner/superuser test credentials, the check rejects SUPERUSER, ownership, and `INSERT` on `job_applications`.
+- Full suite: `python -m pytest backend/tests -q` gave **313 passed, 0 failed**, 1 warning (the existing `httpx`/starlette deprecation warning). The previous total was 242.
+- Mutation checks, each restored from a backup and confirmed with `cmp`. Each one made the focused tests fail:
+  - Startup call removed: 2 failed.
+  - Treating `NULL` as not granted: 19 failed.
+  - Sequence check skipped: 5 failed.
+  - `SET ROLE` check removed: 2 failed.
+  - Never raising: 56 failed.
+
+### Verification Pending
+
+- GitHub Actions CI: **Not run** (not committed or pushed). The two real-database tests depend on `careerpilot_test_reader`, which CI already provisions (Step 73C-10).
+- No demo LOGIN role exists, so no real login has passed the check yet. That is Phase 2.
+
+### Human Oversight
+
+Claude Code did not edit the SQL provisioning scripts, create or modify roles, run provisioning SQL, read `.env`, connect to the development database, commit, push, or deploy. Its database access was limited to `careerpilot_test`, through the existing test credentials. It ran only read-only catalog queries, plus `SET LOCAL ROLE` in a rolled-back transaction in one test. Note: the owner test's catalog query lists every database the test superuser owns, so the development database's *name* appeared in local test output. No connection was made to it.
+
+### Remaining Deployment Blockers
+
+- Phases 2–5 of the Step 73D design: the LOGIN test role and real-login tests, the Render provisioning scripts and runbook, the admin bootstrap and fictional seed, and deployment.
+- Rate limiting, resume input limits, and synthetic-data safeguards.
+- The pool limits are provisional and depend on the Render plan, the role's `CONNECTION LIMIT`, and the worker count.
+
+`public_demo` remains **NOT SAFE TO DEPLOY**.
+
+### Outcome
+
+`public_demo` now refuses to start unless the connected database role is strictly SELECT-only. The check runs through the real demo connection and fails closed on any unexpected attribute, membership, ownership, or privilege.

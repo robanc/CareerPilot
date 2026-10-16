@@ -1,16 +1,28 @@
 
+from contextlib import asynccontextmanager
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 
+from backend.app.database import init_db
 from backend.app.routers.applications import router as applications_router
 from backend.app.routers.dashboard import router as dashboard_router
 from backend.app.routers.resume import router as resume_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create missing tables so a fresh deployment has a usable schema.
+    # Conditional and non-destructive; see database.init_db.
+    init_db()
+    yield
 
 
 app = FastAPI(
     title="CareerPilot API",
     description="Job application tracking and career preparation API",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 

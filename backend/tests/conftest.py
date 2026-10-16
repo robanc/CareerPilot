@@ -25,6 +25,12 @@ TestingSessionLocal = sessionmaker(
 
 
 
+@pytest.fixture
+def test_db_engine():
+    """Expose the test engine so tests can target it explicitly."""
+    return test_engine
+
+
 @pytest.fixture(autouse=True)
 def use_test_database():
     # Safety check: never run cleanup against development database.

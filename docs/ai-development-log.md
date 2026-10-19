@@ -721,7 +721,7 @@ Claude Code did not edit the SQL provisioning scripts, create or modify roles, r
 **Date:** October 19, 2026
 **AI Coding Agent:** Claude Code (Claude Opus 5.5)
 **Development Method:** Human-supervised, agent-assisted implementation
-**Status:** Files written on branch `feature/render-readonly-demo`; Tier 1 and Tier 2 checks passed locally (314 tests passed against the isolated container); `ops/test-backend.ps1` then received a safety patch that passed its Tier 1 read-only checks and its Tier 2 verification (314 passed; port refusal confirmed). Committed as `64f42b0` and pushed to PR #2; GitHub Actions run `39286486531` succeeded, with all three jobs `success`, including `backend-tests` (26 s, confirmed visually by the developer); see "GitHub Actions (PR #2)". This CI record itself is not yet committed
+**Status:** Files written on branch `feature/render-readonly-demo`; Tier 1 and Tier 2 checks passed locally (314 tests passed against the isolated container); `ops/test-backend.ps1` then received a safety patch that passed its Tier 1 read-only checks and its Tier 2 verification (314 passed; port refusal confirmed). Committed as `64f42b0` and pushed to PR #2; GitHub Actions run `39286486531` succeeded, with all three jobs `success`, including `backend-tests` (26 s, confirmed visually by the developer); see "GitHub Actions (PR #2)". That CI record was committed as `0ace3a3`, whose own run `39289469411` also succeeded, with all three jobs `success`. This second-run note is not yet committed
 
 ### Objective
 
@@ -952,9 +952,19 @@ The developer also visually confirmed that the frontend and Docker build jobs su
 
 **pytest count: not separately verified.** The job log, which needs authentication and could not be read because `gh` is not installed, was not checked for the count. The `Run pytest` step succeeded, meaning pytest exited 0, but the number of tests that ran in CI (314 locally) is not recorded here as confirmed.
 
+**Second run: documentation commit `0ace3a3`.** The CI record above was committed as `0ace3a3` ("Document Stage A GitHub Actions verification", log only) and pushed to PR #2 as a normal fast-forward, `64f42b0..0ace3a3`. That push started run https://github.com/robanc/CareerPilot/actions/runs/39289469411 (event `pull_request`). Claude Code monitored it through unauthenticated, read-only API requests every 40 seconds until it finished. Run status: **`completed` / `success`**.
+
+| Job | Job record | Steps |
+|---|---|---|
+| Backend tests (pytest + PostgreSQL 16) | `completed` / `success` | 10, all `success` or `skipped` |
+| Docker image build verification | `completed` / `success` | 7, all `success` or `skipped` |
+| Frontend lint and build | `completed` / `success` | 9, all `success` or `skipped` |
+
+In this run, the `backend-tests` job record itself reported `completed` / `success` through the API, unlike run `39286486531`, where it lagged at `in_progress`. The commit changed only this log, so the run tested the same code as `64f42b0`. It is a second, independent CI pass of the isolated test container setup. The pytest count was again not read, because job logs require authentication.
+
 ### Verification Pending
 
-- (Optional) The exact pytest count in the CI log for job https://github.com/robanc/CareerPilot/actions/runs/39286486531/job/118174239766. The job's success itself is confirmed.
+- (Optional) The exact pytest count in either CI run's `backend-tests` log: https://github.com/robanc/CareerPilot/actions/runs/39286486531/job/118174239766 or https://github.com/robanc/CareerPilot/actions/runs/39289469411/job/118186035593. Both jobs' success is confirmed.
 
 ### Human Oversight
 
@@ -967,7 +977,9 @@ After the developer approved, Claude Code:
 - pushed it to the existing PR #2 branch, without a force push
 - monitored GitHub Actions through read-only, unauthenticated API requests
 
-It did not merge, deploy, open a new PR, or start Stage B. This CI section was then added to the log, which is not yet committed. The `backend-tests` success was confirmed by the developer, who checked it visually in the GitHub Actions UI. Claude Code did not have authenticated access to the job.
+It did not merge, deploy, open a new PR, or start Stage B. This CI section was then added to the log. The `backend-tests` success was confirmed by the developer, who checked it visually in the GitHub Actions UI. Claude Code did not have authenticated access to the job.
+
+With further approval, Claude Code committed that CI section as `0ace3a3` (log only), pushed it normally, without a force push, and monitored the resulting run `39289469411` until it finished. The second-run note was then added to this entry, and is not yet committed.
 
 ### Remaining Deployment Blockers
 
@@ -979,4 +991,4 @@ It did not merge, deploy, open a new PR, or start Stage B. This CI section was t
 
 ### Outcome
 
-The files for an isolated, disposable PostgreSQL 16 test cluster are in place, for both local Windows runs and CI. Locally, the container initializes correctly with the custom `pg_hba.conf`, provisions `careerpilot_test_reader` exactly as in CI before, stays isolated from the development stack, and passes the full existing suite (314 passed). The helper's later safety patch has been verified locally: it passes the full suite, reuses a running test container, and refuses a foreign listener on port 5433 before starting anything. In CI (PR #2, run `39286486531`), all three jobs succeeded. `backend-tests` (26 s) started the isolated container on `ubuntu-latest` and ran pytest successfully. Its exact test count was not separately verified.
+The files for an isolated, disposable PostgreSQL 16 test cluster are in place, for both local Windows runs and CI. Locally, the container initializes correctly with the custom `pg_hba.conf`, provisions `careerpilot_test_reader` exactly as in CI before, stays isolated from the development stack, and passes the full existing suite (314 passed). The helper's later safety patch has been verified locally: it passes the full suite, reuses a running test container, and refuses a foreign listener on port 5433 before starting anything. In CI (PR #2, run `39286486531`), all three jobs succeeded. `backend-tests` (26 s) started the isolated container on `ubuntu-latest` and ran pytest successfully. A second run (`39289469411`, for the documentation commit `0ace3a3`) also succeeded, with all three job records `completed` / `success`. The exact CI test count was not separately verified.

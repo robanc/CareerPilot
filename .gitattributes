@@ -1,0 +1,4 @@
+# Files mounted into the Linux test PostgreSQL container
+# (docker-compose.test.yml) keep LF line endings on Windows checkouts.
+backend/tests/sql/*.sql            text eol=lf
+backend/tests/postgres/pg_hba.conf text eol=lf

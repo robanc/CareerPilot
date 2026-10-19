@@ -22,28 +22,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # Temporary CI-only credentials. They exist only inside the ephemeral
-      # service container below and are not secrets or production values.
-      POSTGRES_USER: careerpilot_ci
-      POSTGRES_PASSWORD: careerpilot_ci_password
-      POSTGRES_DB: careerpilot_ci
+      # Fixed, non-secret credentials of the isolated, disposable test
+      # container in docker-compose.test.yml (the same container local runs
+      # use through ops/test-backend.ps1). Not production values.
+      POSTGRES_USER: careerpilot_test_admin
+      POSTGRES_PASSWORD: careerpilot_test_admin_password
+      POSTGRES_DB: careerpilot_test
       POSTGRES_HOST: 127.0.0.1
-      POSTGRES_PORT: "5432"
-      PGPASSWORD: careerpilot_ci_password
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: careerpilot_ci
-          POSTGRES_PASSWORD: careerpilot_ci_password
-          POSTGRES_DB: careerpilot_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U careerpilot_ci -d careerpilot_ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+      POSTGRES_PORT: "5433"
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -58,33 +44,25 @@ jobs:
       - name: Install backend dependencies
         run: python -m pip install -r backend/requirements.txt
 
-      - name: Create careerpilot_test database (idempotent)
-        run: |
-          exists=$(psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-            -v ON_ERROR_STOP=1 -tAc \
-            "SELECT 1 FROM pg_database WHERE datname = 'careerpilot_test'")
-          if [ "$exists" != "1" ]; then
-            createdb -h "$POSTGRES_HOST" -U "$POSTGRES_USER" careerpilot_test
-          fi
-          psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d careerpilot_test \
-            -v ON_ERROR_STOP=1 -tAc "SELECT current_database()"
-
-      # SELECT-only NOLOGIN role used by backend/tests/test_test_reader_role.py.
-      # Runs as POSTGRES_USER (the service superuser, which owns
-      # careerpilot_test), as the scripts require. Each script has its own
-      # BEGIN/COMMIT, so no --single-transaction. Any error stops the step.
-      - name: Provision careerpilot_test_reader role
-        run: |
-          set -eu
-          for script in 01_test_reader_role.sql 02_test_reader_grants.sql; do
-            psql -X -v ON_ERROR_STOP=1 -h "$POSTGRES_HOST" -U "$POSTGRES_USER" \
-              -d careerpilot_test -f "backend/tests/sql/$script"
-          done
+      # PostgreSQL 16 with the test-only pg_hba.conf, on 127.0.0.1:5433. On
+      # its fresh (tmpfs) start the image creates careerpilot_test, owned by
+      # the test superuser, and runs backend/tests/sql/*.sql in name order
+      # (01 and 02 provision the SELECT-only NOLOGIN careerpilot_test_reader
+      # used by test_test_reader_role.py). Any script error stops the
+      # container before it becomes healthy, so --wait fails this step.
+      - name: Start isolated test PostgreSQL
+        run: docker compose -p careerpilot-test -f docker-compose.test.yml up --detach --wait
 
       # Run from the repository root with "python -m" so the "backend"
       # package is importable (there is no backend/__init__.py).
       - name: Run pytest
         run: python -m pytest backend/tests -v
+
+      # Server logs only (statement logging is off by default). They contain
+      # no secrets; the credentials above are fixed test values.
+      - name: Show test PostgreSQL logs
+        if: failure()
+        run: docker compose -p careerpilot-test -f docker-compose.test.yml logs db-test
 
   frontend:
     name: Frontend lint and build

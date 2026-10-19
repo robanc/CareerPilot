@@ -715,3 +715,233 @@ Claude Code did not edit the SQL provisioning scripts, create or modify roles, r
 ### Outcome
 
 `public_demo` now refuses to start unless the connected database role is strictly SELECT-only. The check runs through the real demo connection and fails closed on any unexpected attribute, membership, ownership, or privilege.
+
+## Entry 010 — Isolated PostgreSQL Test Container (Step 73D-2 Stage A)
+
+**Date:** October 19, 2026
+**AI Coding Agent:** Claude Code (Claude Opus 5.5)
+**Development Method:** Human-supervised, agent-assisted implementation
+**Status:** Files written on branch `feature/render-readonly-demo`; Tier 1 and Tier 2 checks passed locally (314 tests passed against the isolated container); `ops/test-backend.ps1` then received a safety patch that passed its Tier 1 read-only checks and its Tier 2 verification (314 passed; port refusal confirmed); GitHub Actions not yet run; awaiting developer review; not committed
+
+### Objective
+
+Stage A of the approved Step 73D-2 v3 design: move backend testing to a dedicated, disposable PostgreSQL 16 container, so a future test LOGIN role (`careerpilot_test_demo_login`) never exists in the cluster that holds development data. Locally the development container stays unchanged. In CI, the same container replaces the GitHub Actions service container.
+
+Stage A only adds the container and how it is started. It creates no LOGIN role. Stages B–E (scripts 03–05, the ephemeral-password fixture, real-login and negative tests, docs) were not started.
+
+### Why a Separate Container
+
+- **Locally:** it is the only way to keep a LOGIN role out of the cluster with development data, without editing that cluster's `pg_hba.conf` or PUBLIC grants (both rejected in review).
+- **In CI:** the old service container already isolated *data* (ephemeral, no real data). But its `pg_hba.conf` cannot be controlled: service containers start before checkout and cannot override the command. So per-database restriction and SCRAM-only login could not be enforced there. Using the same Compose file in both places gives identical behaviour, with fewer CI steps than before.
+
+### Files Changed
+
+- `docker-compose.test.yml` — **New.** Project `careerpilot-test`, service `db-test`, `postgres:16-alpine`.
+  - The data directory is tmpfs.
+  - It listens on `127.0.0.1:5433`.
+  - `-c hba_file=/etc/careerpilot/pg_hba.conf` and `-c cluster_name=careerpilot-test`.
+  - `backend/tests/sql` is mounted read-only as the image's init directory.
+  - The healthcheck uses `pg_isready` over TCP.
+  - Credentials are fixed, non-secret test values, and the file has no `${...}` interpolation.
+- `backend/tests/postgres/pg_hba.conf` — **New.** In order:
+  1. three lines for `careerpilot_test_demo_login` (reject over the socket, SCRAM over TCP into `careerpilot_test` only, reject everything else)
+  2. `local all all trust`
+  3. `host all all all scram-sha-256`
+
+  Replication connections match no line, so they are rejected.
+- `.gitattributes` — **New** (none existed). LF line endings for `backend/tests/sql/*.sql` and the new `pg_hba.conf`, which are mounted into a Linux container.
+- `ops/test-backend.ps1` — **New.** Windows helper:
+  - starts or reuses the container with `up --detach --wait`
+  - sets `POSTGRES_*` for one pytest run
+  - restores the previous values in `finally`
+  - runs fail-closed safety checks before startup, after startup, and before pytest (added by the safety patch; see below)
+- `.github/workflows/ci.yml` — `backend-tests` job only:
+  - **removed:** the `services: postgres` block, `PGPASSWORD`, **Create careerpilot_test database (idempotent)**, and **Provision careerpilot_test_reader role**
+  - **added:** **Start isolated test PostgreSQL** (`docker compose -p careerpilot-test -f docker-compose.test.yml up --detach --wait`) and a **Show test PostgreSQL logs** step that runs only on failure
+  - `POSTGRES_*` now hold the test container's values, with port 5433
+  - **Run pytest** and the frontend and docker-build jobs are unchanged
+- `docs/ai-development-log.md` — This entry.
+
+**Unchanged:** `01_test_reader_role.sql`, `02_test_reader_grants.sql`, `docker-compose.yml`, `conftest.py`, `db_safety.py`, and all application code. Local mode and `public_demo` behaviour are unchanged.
+
+### Design Notes
+
+**PostgreSQL 16 initialization with the custom `pg_hba.conf`.** This reasoning comes from the official image's entrypoint and was confirmed locally by the Tier 2 container log (below):
+- The entrypoint passes the container command's arguments, including `-c hba_file=...`, to its temporary initialization server. That server listens only on the Unix socket.
+- Initialization runs `psql --no-password` over that socket as the test superuser. The `local all all trust` line is what allows it. The role-specific `local ... reject` line affects only `careerpilot_test_demo_login`, which does not exist yet.
+- The entrypoint appends its own `host all all all scram-sha-256` line to `$PGDATA/pg_hba.conf`. That file is not used, because `hba_file` points elsewhere.
+- The image creates `careerpilot_test` as the test superuser, then runs `01` and `02` against it. Their pre-checks hold:
+  - the current database is `careerpilot_test`
+  - `current_user` is a superuser and owns the database
+  - `public` is owned by `pg_database_owner`
+  - no relations exist yet
+- The TCP healthcheck fails while only the socket server is running, so `--wait` returns only after initialization has finished.
+
+**Isolation of the Compose project from development:**
+- Separate project name: `name:` in the file, and `-p careerpilot-test` on every command, which also overrides any `COMPOSE_PROJECT_NAME`.
+- Separate service name, no `container_name`, no external networks, and no named volumes.
+- tmpfs data: a restart or `down` discards everything.
+- Separate host port.
+- No interpolation from `.env`.
+
+**`ops/test-backend.ps1` safety:**
+- **Exactly one pytest target.** `-Path` defaults to `backend/tests`. A single file or `file::test` node replaces it rather than being added to it. The path must exist and be inside `backend/tests`.
+- **Unknown arguments are rejected.** `[CmdletBinding()]` means anything other than `-Path` causes an error, so nothing is passed through to pytest by accident.
+- **Dot-sourcing is refused.** In the caller's scope, `exit` would close the interactive shell. When the script runs normally, `exit` ends only the script.
+- **`$ErrorActionPreference = 'Continue'`.** Windows PowerShell 5.1 can turn docker's stderr progress into a terminating error under `Stop`, so exit codes are checked explicitly instead.
+- **Environment restore.** The previous `POSTGRES_*` values (or their absence) are restored in `finally`, which PowerShell also runs on Ctrl+C.
+- **No values printed.** It never reads `.env` and prints no values.
+
+**`ops/test-backend.ps1` safety patch (after Tier 2, developer-requested):** the checks only read Docker and port state; they never stop, change, or remove anything. Any failure throws, the run is refused with exit code 3, and the `finally` block still restores `POSTGRES_*`. Docker state is read as `docker inspect` JSON and parsed with `ConvertFrom-Json`, because Windows PowerShell 5.1 strips the inner quotes of `--format` templates (seen in Tier 2).
+- **Before startup:**
+  - The `careerpilot-test` project may contain at most one container, with service label `db-test`. Any other container in the project refuses the run.
+  - The project may have no volumes, and no network other than `careerpilot-test_default`.
+  - No container outside the project may be *running* with a host port binding on 5433. A *stopped* one (such as `pipeline-kestra_postgres-1`, found in Tier 2) only produces a warning, because it cannot hold the port.
+  - No process may listen on 5433 (checked with `Get-NetTCPConnection`) unless this project's own container is already running with that binding. Otherwise the run is refused, naming the owning process and PID.
+- **After startup:**
+  - The project must contain exactly one `db-test` container, running and `healthy`, with image `postgres:16-alpine`.
+  - Its only port binding must be `127.0.0.1:5433->5432/tcp`.
+  - Its only mounts must be the two read-only bind mounts (`/docker-entrypoint-initdb.d` and `/etc/careerpilot/pg_hba.conf`), with no volume of any kind, and `/var/lib/postgresql/data` must be tmpfs.
+  - The check for other running containers on 5433 repeats.
+- **Before pytest:** with the test `POSTGRES_*` set, a short Python/psycopg check connects to `127.0.0.1:5433`, the exact endpoint pytest uses. It must read `cluster_name = careerpilot-test` and `hba_file = /etc/careerpilot/pg_hba.conf`. The check is sent to `python -` on stdin to avoid PowerShell 5.1 quoting. On a connection failure it prints only the exception type, never a message, URL, or credential.
+- **Exit codes:** pytest's own code; 2 for an invalid `-Path` or a missing tool; 3 for a refused safety check. Unknown parameters are rejected by PowerShell's own parameter binding with exit 1, which is also pytest's "tests failed" code. The help text originally said "2 for invalid usage"; the pre-commit review corrected it (documentation only).
+- **Not checked:** the time between the final check and pytest connecting (a time-of-check/time-of-use gap). Also, a listener is attributed to the test container only by the container's own port binding, not by matching the owning process.
+
+### Security Limitations
+
+- **Fixed test superuser credentials are committed** in `docker-compose.test.yml`, `ci.yml`, and `ops/test-backend.ps1`. They are non-secret by design. Anyone on the local machine who knows them gets superuser on the throwaway test container. With that, PostgreSQL superuser features allow code execution inside that container, but not on the host. The port is bound to `127.0.0.1` only.
+- **`local all all trust` inside the container.** Anyone who can `docker exec` into the test container can connect as any role without a password. Such a person already controls the container.
+- **Plain `python -m pytest backend/tests` still targets the development cluster's `careerpilot_test`** (the `.env` settings, port 5432), as before. Only the helper script and CI use the isolated container. `CLAUDE.md` still documents the plain command. Updating it is planned for Stage E and was outside this stage's file list.
+- **Leftovers in the development cluster.** The existing `careerpilot_test` database and `careerpilot_test_reader` role there are untouched. Removing them would be a destructive operation and needs separate approval.
+- **The container keeps running** between local runs until `docker compose -p careerpilot-test -f docker-compose.test.yml down`.
+- **Assumptions:** confirmed locally by Tier 2 (see below): the entrypoint behaviour, tmpfs creating no anonymous volume, the Windows bind mounts, and `up --wait` on Docker Desktop. **Still unconfirmed:** `up --wait` and the same behaviour on GitHub's `ubuntu-latest` runner.
+- **Latent local port conflict (found in Tier 2).** A stopped container from an unrelated project, `pipeline-kestra_postgres-1`, is configured to publish `0.0.0.0:5433`. It was exited during verification, so there was no conflict, but starting it would clash with the test container. After the safety patch, the helper warns about it while it is stopped and refuses to run if it is running. (CI does not use the helper; a GitHub runner has no such containers.)
+- **The `postgres` database in the test cluster keeps default ACLs** (PUBLIC has CONNECT and TEMP). The reader is NOLOGIN. The future test LOGIN role is blocked from it by `pg_hba.conf`, which a Stage C probe test will verify with a real login attempt.
+
+### Verification Results (Tier 1, Read-Only)
+
+The developer approved the Tier 1 checks only. They started no container, ran no SQL or pytest, and changed no files.
+
+| # | Check | Result |
+|---|---|---|
+| 1 | `docker compose -p careerpilot-test -f docker-compose.test.yml config --quiet` | Passed (exit 0) |
+| 2 | PowerShell parser (`[System.Management.Automation.Language.Parser]::ParseFile`) on `ops/test-backend.ps1`, Windows PowerShell 5.1.26100 | Passed: 0 parse errors |
+| 3 | `yaml.safe_load` on `.github/workflows/ci.yml` and `docker-compose.test.yml` | Passed |
+| 4 | `git check-attr eol` on `pg_hba.conf`, `01_test_reader_role.sql`, `02_test_reader_grants.sql` | Passed: all `eol: lf` |
+| 5a | `ops/test-backend.ps1 -Path README.md` | Refused before Docker: "-Path must be inside backend/tests" (exit 2) |
+| 5b | `ops/test-backend.ps1 -Path backend/tests/nope.py` | Refused before Docker: "-Path does not exist" (exit 2) |
+| 5c | `ops/test-backend.ps1 -k foo` | Refused by parameter binding: "A parameter cannot be found that matches parameter name 'k'" (exit 1) |
+| 5d | Dot-sourcing the script in a child PowerShell | Refused with the dot-source error. The shell kept running, and `POSTGRES_PORT` was still unset afterwards. |
+
+Every check in 5 ran in a child `powershell -NoProfile -ExecutionPolicy Bypass` process and stopped before Docker was called.
+
+The first two attempts at 5d gave inconclusive output because of quoting in the test command itself, not the script. The outer shell expanded `$env:` early, and Windows PowerShell 5.1 stripped the inner quotes. It was rerun with `-EncodedCommand`, which gave the result above.
+
+Before the checks, the new files were confirmed to be pure ASCII (Windows PowerShell 5.1 misreads non-ASCII in files without a BOM), and `git diff` was reviewed.
+
+**Not covered by Tier 1:**
+- the container's startup with the custom `pg_hba.conf`
+- tmpfs avoiding an anonymous volume
+- the Windows bind mounts
+- `up --wait`
+- the test suite against the container
+
+### Verification Results (Tier 2, Local Container)
+
+The developer approved starting only the `careerpilot-test` project, running the existing suite against it, and shutting it down. No files were edited during the run. All SQL run against the container was read-only catalog queries, apart from what the image's initialization and pytest themselves do inside `careerpilot_test`.
+
+**Pre-checks (before starting anything):**
+- **Development stack:** `careerpilot-db-1`, `careerpilot-backend-1`, and `careerpilot-frontend-1` were in Compose project `careerpilot`, with the database on `127.0.0.1:5432` and healthy. Their start times and restart counts (0) were recorded.
+- **No test resources:** no `careerpilot-test` containers, networks, or volumes existed.
+- **Port 5433:** not listening.
+- **Volume baseline:** 43 volumes, including existing anonymous volumes from other projects. The full list was saved for comparison.
+
+**Results:**
+
+| # | Check | Result |
+|---|---|---|
+| 1 | `docker compose -p careerpilot-test -f docker-compose.test.yml up --detach --wait` | Exit 0. It created only network `careerpilot-test_default` and container `careerpilot-test-db-test-1`, which reached healthy. |
+| 2 | Health and markers | `healthy`, 0 restarts. PostgreSQL 16.14. `cluster_name = careerpilot-test`, `hba_file = /etc/careerpilot/pg_hba.conf`, `password_encryption = scram-sha-256`. |
+| 2 | Initialization with the custom `pg_hba.conf` | Container log, in order: the temporary initialization server became ready (pid 42), `CREATE DATABASE`, `01_test_reader_role.sql` (`BEGIN`/`DO`/`COMMIT`), `02_test_reader_grants.sql` (`BEGIN`/`DO`/`DO`/`COMMIT`), then the real server became ready (pid 1). `pg_hba_file_rules`: 5 rules in file order, no errors, and the three `careerpilot_test_demo_login` rules come first. |
+| 3 | `careerpilot_test_reader` attributes | NOLOGIN. No SUPERUSER, INHERIT, CREATEDB, CREATEROLE, REPLICATION, or BYPASSRLS. `CONNECTION LIMIT 0`, 0 memberships in either direction, 0 role settings, owns nothing. |
+| 3 | `careerpilot_test_reader` privileges | CONNECT and `USAGE` on `public`. No TEMPORARY or CREATE on the database, no CREATE on `public`, no `pg_read_all_data`/`pg_write_all_data`. One default ACL: `SELECT` (no grant option) on tables created by `careerpilot_test_admin` in `public`. Its only `pg_shdepend` references are in `careerpilot_test` (one `pg_namespace` ACL, one `pg_default_acl` ACL); there are none on shared objects or in other databases. PUBLIC's TEMPORARY on `careerpilot_test` is revoked (`=c/`). |
+| 4 | Databases in the cluster | Only `careerpilot_test`, `postgres`, `template0`, `template1`, all owned by the test superuser. No development database. |
+| 4 | Mounts | Two read-only bind mounts (`pg_hba.conf` and `backend/tests/sql`) and a tmpfs data directory (`/proc/mounts`: `tmpfs ... rw,nosuid,nodev,noexec`). No named volume. |
+| 4 | Anonymous volume | **None created.** 43 volumes before and after, same names. |
+| 4 | Network and port | Only `careerpilot-test_default`, with this container as its only member. The port is bound to `127.0.0.1:5433` only. |
+| 5 | `powershell -NoProfile -ExecutionPolicy Bypass -File .\ops\test-backend.ps1` | **314 passed, 0 failed**, 1 warning (the existing `httpx`/starlette deprecation warning), 9.60 s, helper exit 0. |
+| 5 | The run used the isolated cluster | Afterwards the container's `careerpilot_test` showed 1,176 committed transactions, and `job_applications` (owned by `careerpilot_test_admin`) carried `careerpilot_test_reader=r` from the default privilege. |
+| 6 | Output scan for secrets | The test admin password: 0 occurrences. `5432`: 0. The 9 lines matching `postgresql://` or `PASSWORD` are names of existing parametrized tests that use deliberate placeholder values (`demo-placeholder-secret`, `owner-secret-value`) on the never-resolving `.invalid` domain, or the variable name `POSTGRES_PASSWORD`. |
+| 7 | `docker compose -p careerpilot-test -f docker-compose.test.yml down` (no `-v`) | Exit 0. It removed only the test container and the test network. |
+| 7 | After shutdown | Dev containers have the same start times, 0 restarts, and are still up (the database healthy). No `careerpilot-test` containers or networks remain. Volumes are unchanged (43). Port 5433 is free. |
+
+**Security findings:** none. An improvement over running tests in the development cluster: the owner-privilege test lists the databases its user owns, and it now sees only the test cluster, so the development database's name can no longer appear in test output (see Entry 009's Human Oversight note). The two non-blocking observations (the latent 5433 conflict and default ACLs on `postgres`) are listed under Security Limitations.
+
+**Process notes:**
+- One `docker ps --format` call failed because Windows PowerShell 5.1 strips the inner quotes in a Go template. It was rerun from Bash.
+- The first volume comparison falsely reported every line as different because the PowerShell-written baseline used CRLF line endings. It was rerun with `diff --strip-trailing-cr`.
+- Temporary comparison files in `%TEMP%` were deleted afterwards.
+
+**Scope of these results:** Tier 1 and Tier 2 above ran against the helper **before** the safety patch.
+
+### Verification Results (Safety Patch, Tier 1, Read-Only)
+
+The developer approved the Tier 1 checks only. They started no container, ran no Docker command, SQL, or pytest, and changed no files.
+
+| # | Check | Result |
+|---|---|---|
+| 1 | PowerShell parser (`[System.Management.Automation.Language.Parser]::ParseFile`) on the patched `ops/test-backend.ps1`, Windows PowerShell 5.1 | Passed: 0 parse errors |
+| 2 | `ops/test-backend.ps1 -Path README.md` | Refused: "-Path must be inside backend/tests: README.md" (exit 2) |
+| 3 | `ops/test-backend.ps1 -Path backend/tests/nope.py` | Refused: "-Path does not exist: backend/tests/nope.py" (exit 2) |
+| 4 | `ops/test-backend.ps1 -k foo` | Refused by parameter binding: "A parameter cannot be found that matches parameter name 'k'" (exit 1) |
+| 5 | Dot-sourcing the script in a child PowerShell (sent with `-EncodedCommand`) | Refused with the dot-source error. The shell kept running, and `POSTGRES_PORT` was still unset afterwards. |
+
+Every check ran in a child `powershell -NoProfile -ExecutionPolicy Bypass` process. Each refusal happened during argument validation, before any of the new Docker checks. Before the checks, the patched file was confirmed to be pure ASCII, and its diff against the reviewed version was shown to the developer.
+
+**Not covered by this Tier 1:** every new safety check, because each one needs Docker (project contents, other containers and listeners on port 5433, the container check after startup, and the `127.0.0.1:5433` check of `cluster_name` and `hba_file`).
+
+### Verification Results (Safety Patch, Tier 2, Local Container)
+
+The developer approved starting and stopping only the `careerpilot-test` project, running the existing tests through the patched helper, and opening a temporary local TCP listener only to test the port refusal. No files were edited during the run.
+
+**Baseline:**
+- `careerpilot-db-1`, `careerpilot-backend-1`, and `careerpilot-frontend-1` were running with 0 restarts. Their start times were recorded.
+- `careerpilot-test` had 0 containers, networks, and volumes. There were 43 volumes in total, and port 5433 was not listening.
+
+**Results:**
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `powershell -NoProfile -ExecutionPolicy Bypass -File .\ops\test-backend.ps1` | Printed the expected warning: "stopped container pipeline-kestra_postgres-1 is configured to publish host port 5433; starting it would conflict." The checks before startup passed, then `up --detach --wait` created the network and container and reached `Healthy`. The checks after startup and the `127.0.0.1:5433` marker check passed; they print nothing on success, and pytest runs only after all of them, with 0 refusal lines in the output. **314 passed, 0 failed**, 1 warning (the existing `httpx`/starlette deprecation warning), 9.91 s, **exit 0**. Checked independently afterwards: the container was `running`/`healthy` with image `postgres:16-alpine`, and its markers read `careerpilot-test`, `/etc/careerpilot/pg_hba.conf`. |
+| 2 | `... test-backend.ps1 -Path backend/tests/test_health.py`, with the container still running | 1 item collected, **1 passed**, **exit 0**. Only the selected file ran. The container's start time was unchanged, so it was reused, and the listener on 5433 was correctly accepted as the test container's own. |
+| 3 | `docker compose -p careerpilot-test -f docker-compose.test.yml down` (no `-v`) | Exit 0. It removed only the test container and the test network. Port 5433 was free afterwards. |
+| 4 | Temporary .NET `TcpListener` on `127.0.0.1:5433` in the calling PowerShell (PID 24604); the helper run as a child process; `$listener.Stop()` in `finally` | Refused before Docker Compose startup: "refusing to run the tests: port 5433 is already in use by powershell (PID 24604), not by the careerpilot-test container." **Exit 3**, naming the listener's own process. Compose did not run: there was no `Creating` output, and no `careerpilot-test` container or network existed afterwards. The listener was stopped and port 5433 was free again. |
+| 5 | Final state | `careerpilot-test`: 0 containers, networks, and volumes. All 43 volumes unchanged. The development containers had the same start times, 0 restarts, and were still running. `pipeline-kestra_postgres-1` was still `exited` and was never touched. The test admin password appeared 0 times in the helper output. Temporary output files were deleted. |
+
+**Problems:** none in the helper.
+
+**Process notes:**
+- In step 1, the calling command's own `*>&1` capture turned docker's progress output into `NativeCommandError` text. This came from the outer capture, not the helper; it is the Windows PowerShell 5.1 behaviour the helper avoids by not using `Stop`.
+- The safety checks print nothing on success, so in normal use the only sign they ran is that pytest starts. A one-line success message was suggested but not added.
+
+### Verification Pending
+
+- GitHub Actions on the new `backend-tests` job (`up --wait` on `ubuntu-latest`, then the full suite). Not run, because nothing is committed or pushed.
+
+### Human Oversight
+
+Claude Code created or edited only the five listed files and this log. With the developer's approval, it ran the Tier 1 read-only checks and then the Tier 2 verification. Tier 2 started and stopped only the `careerpilot-test` Compose project, ran read-only catalog queries in the test container, and ran the existing test suite through `ops/test-backend.ps1`. It did not stop, restart, or modify any development container, create scripts 03–05 or the LOGIN role, change permissions outside the test container, use `down -v`, read `.env` or any secret, commit, push, merge, or deploy.
+
+For the safety patch, Claude Code edited only `ops/test-backend.ps1` and this entry. With the developer's approval, it then ran the patch's Tier 1 read-only checks and its Tier 2 verification above. Tier 2 started and stopped only the `careerpilot-test` project, ran the existing tests through the helper, and opened (then closed) one temporary listener on `127.0.0.1:5433`. It did not touch any development or unrelated container, use `down -v`, change SQL or roles, read `.env` or any secret, commit, push, merge, or deploy.
+
+### Remaining Deployment Blockers
+
+- Step 73D-2 Stages B–E: scripts 03–05, the ephemeral SCRAM password fixture with its safety gate, real-login and negative privilege tests, and documentation.
+- The later Step 73D phases: Render provisioning scripts and runbook, admin bootstrap and fictional seed, and deployment.
+- Rate limiting, resume input limits, and synthetic-data safeguards.
+
+`public_demo` remains **NOT SAFE TO DEPLOY**.
+
+### Outcome
+
+The files for an isolated, disposable PostgreSQL 16 test cluster are in place, for both local Windows runs and CI. Locally, the container initializes correctly with the custom `pg_hba.conf`, provisions `careerpilot_test_reader` exactly as in CI before, stays isolated from the development stack, and passes the full existing suite (314 passed). The helper's later safety patch has been verified locally: it passes the full suite, reuses a running test container, and refuses a foreign listener on port 5433 before starting anything. The CI path is unverified until the branch is pushed.

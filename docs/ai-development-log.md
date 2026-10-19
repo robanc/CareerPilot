@@ -721,7 +721,7 @@ Claude Code did not edit the SQL provisioning scripts, create or modify roles, r
 **Date:** October 19, 2026
 **AI Coding Agent:** Claude Code (Claude Opus 5.5)
 **Development Method:** Human-supervised, agent-assisted implementation
-**Status:** Files written on branch `feature/render-readonly-demo`; Tier 1 and Tier 2 checks passed locally (314 tests passed against the isolated container); `ops/test-backend.ps1` then received a safety patch that passed its Tier 1 read-only checks and its Tier 2 verification (314 passed; port refusal confirmed); GitHub Actions not yet run; awaiting developer review; not committed
+**Status:** Files written on branch `feature/render-readonly-demo`; Tier 1 and Tier 2 checks passed locally (314 tests passed against the isolated container); `ops/test-backend.ps1` then received a safety patch that passed its Tier 1 read-only checks and its Tier 2 verification (314 passed; port refusal confirmed). Committed as `64f42b0` and pushed to PR #2; GitHub Actions run `39286486531` succeeded, with all three jobs `success`, including `backend-tests` (26 s, confirmed visually by the developer); see "GitHub Actions (PR #2)". This CI record itself is not yet committed
 
 ### Objective
 
@@ -814,7 +814,7 @@ Stage A only adds the container and how it is started. It creates no LOGIN role.
 - **Plain `python -m pytest backend/tests` still targets the development cluster's `careerpilot_test`** (the `.env` settings, port 5432), as before. Only the helper script and CI use the isolated container. `CLAUDE.md` still documents the plain command. Updating it is planned for Stage E and was outside this stage's file list.
 - **Leftovers in the development cluster.** The existing `careerpilot_test` database and `careerpilot_test_reader` role there are untouched. Removing them would be a destructive operation and needs separate approval.
 - **The container keeps running** between local runs until `docker compose -p careerpilot-test -f docker-compose.test.yml down`.
-- **Assumptions:** confirmed locally by Tier 2 (see below): the entrypoint behaviour, tmpfs creating no anonymous volume, the Windows bind mounts, and `up --wait` on Docker Desktop. **Still unconfirmed:** `up --wait` and the same behaviour on GitHub's `ubuntu-latest` runner.
+- **Assumptions:** confirmed locally by Tier 2 (see below): the entrypoint behaviour, tmpfs creating no anonymous volume, the Windows bind mounts, and `up --wait` on Docker Desktop. On GitHub's `ubuntu-latest` runner, the **Start isolated test PostgreSQL** step (`up --detach --wait`) succeeded in run `39286486531`. The detailed container checks (markers, mounts, volumes) were run only locally, not in CI.
 - **Latent local port conflict (found in Tier 2).** A stopped container from an unrelated project, `pipeline-kestra_postgres-1`, is configured to publish `0.0.0.0:5433`. It was exited during verification, so there was no conflict, but starting it would clash with the test container. After the safety patch, the helper warns about it while it is stopped and refuses to run if it is running. (CI does not use the helper; a GitHub runner has no such containers.)
 - **The `postgres` database in the test cluster keeps default ACLs** (PUBLIC has CONNECT and TEMP). The reader is NOLOGIN. The future test LOGIN role is blocked from it by `pg_hba.conf`, which a Stage C probe test will verify with a real login attempt.
 
@@ -924,15 +924,50 @@ The developer approved starting and stopping only the `careerpilot-test` project
 - In step 1, the calling command's own `*>&1` capture turned docker's progress output into `NativeCommandError` text. This came from the outer capture, not the helper; it is the Windows PowerShell 5.1 behaviour the helper avoids by not using `Stop`.
 - The safety checks print nothing on success, so in normal use the only sign they ran is that pytest starts. A one-line success message was suggested but not added.
 
+### Commit and Push
+
+- **Pre-commit review:** `git status` showed exactly the six intended files. `git diff --check` was clean. The untracked files had no trailing whitespace, tabs, or non-ASCII characters. The only credential was the documented test value, plus the docker-build job's existing dummy `ci` value, which is outside this diff. There were no SQL, role, or grant changes. The log change was append-only.
+  - One finding was fixed before committing (documentation only): the helper's help text said "2 for invalid usage", but unknown parameters exit 1 from PowerShell's parameter binding. The helper re-parsed with 0 errors after the fix.
+- **Commit:** `64f42b0` "Add isolated PostgreSQL test container for backend tests and CI" contains exactly the six files (712 insertions, 43 deletions). `git ls-files --eol` confirmed `pg_hba.conf`, `01`, and `02` are stored and checked out with LF.
+- **Push (developer-approved):** before pushing, these were confirmed:
+  - The branch was `feature/render-readonly-demo`, HEAD was `64f42b0`, and the tree was clean.
+  - The branch was 1 ahead and 0 behind its origin branch.
+  - PR #2 was open and unmerged, with base `main` and head `robanc/CareerPilot:feature/render-readonly-demo` at `feb86c1`. `gh` is not installed, so this was read through the unauthenticated GitHub REST API (public repository).
+
+  Then `git push origin feature/render-readonly-demo` fast-forwarded `feb86c1..64f42b0`. There was no force push, no new PR, and no merge.
+
+### GitHub Actions (PR #2)
+
+**Run:** https://github.com/robanc/CareerPilot/actions/runs/39286486531. Event `pull_request`, head `64f42b0`, associated with PR #2. Run status: **`completed` / `success`**.
+
+| Job | Result |
+|---|---|
+| Frontend lint and build | `success` (16:34:14Z–16:34:23Z) |
+| Docker image build verification | `success` (16:34:14Z–16:34:44Z) |
+| Backend tests (pytest + PostgreSQL 16) | **`success`, 26 s** (confirmed visually by the developer in the GitHub Actions UI). Steps per the API: Set up job, checkout, Python 3.12, and install `success`; **Start isolated test PostgreSQL `success` (9 s)**; **Run pytest `success` (5 s)**; Show test PostgreSQL logs `skipped` (it runs only on failure); post-steps and Complete job `success`. |
+
+The developer also visually confirmed that the frontend and Docker build jobs succeeded in this run.
+
+**Resolved: the earlier `in_progress` uncertainty.** Right after the run finished, and again on a re-check, Claude Code's unauthenticated API requests returned the `backend-tests` job record and its check run as `in_progress`, with no conclusion and no completion time. That was despite the run-level `success` and every step having completed successfully. The developer then confirmed in the GitHub Actions UI that the job succeeded in 26 seconds. The API record was a lagging state, not a failure or a hung job.
+
+**pytest count: not separately verified.** The job log, which needs authentication and could not be read because `gh` is not installed, was not checked for the count. The `Run pytest` step succeeded, meaning pytest exited 0, but the number of tests that ran in CI (314 locally) is not recorded here as confirmed.
+
 ### Verification Pending
 
-- GitHub Actions on the new `backend-tests` job (`up --wait` on `ubuntu-latest`, then the full suite). Not run, because nothing is committed or pushed.
+- (Optional) The exact pytest count in the CI log for job https://github.com/robanc/CareerPilot/actions/runs/39286486531/job/118174239766. The job's success itself is confirmed.
 
 ### Human Oversight
 
 Claude Code created or edited only the five listed files and this log. With the developer's approval, it ran the Tier 1 read-only checks and then the Tier 2 verification. Tier 2 started and stopped only the `careerpilot-test` Compose project, ran read-only catalog queries in the test container, and ran the existing test suite through `ops/test-backend.ps1`. It did not stop, restart, or modify any development container, create scripts 03–05 or the LOGIN role, change permissions outside the test container, use `down -v`, read `.env` or any secret, commit, push, merge, or deploy.
 
 For the safety patch, Claude Code edited only `ops/test-backend.ps1` and this entry. With the developer's approval, it then ran the patch's Tier 1 read-only checks and its Tier 2 verification above. Tier 2 started and stopped only the `careerpilot-test` project, ran the existing tests through the helper, and opened (then closed) one temporary listener on `127.0.0.1:5433`. It did not touch any development or unrelated container, use `down -v`, change SQL or roles, read `.env` or any secret, commit, push, merge, or deploy.
+
+After the developer approved, Claude Code:
+- committed `64f42b0`
+- pushed it to the existing PR #2 branch, without a force push
+- monitored GitHub Actions through read-only, unauthenticated API requests
+
+It did not merge, deploy, open a new PR, or start Stage B. This CI section was then added to the log, which is not yet committed. The `backend-tests` success was confirmed by the developer, who checked it visually in the GitHub Actions UI. Claude Code did not have authenticated access to the job.
 
 ### Remaining Deployment Blockers
 
@@ -944,4 +979,4 @@ For the safety patch, Claude Code edited only `ops/test-backend.ps1` and this en
 
 ### Outcome
 
-The files for an isolated, disposable PostgreSQL 16 test cluster are in place, for both local Windows runs and CI. Locally, the container initializes correctly with the custom `pg_hba.conf`, provisions `careerpilot_test_reader` exactly as in CI before, stays isolated from the development stack, and passes the full existing suite (314 passed). The helper's later safety patch has been verified locally: it passes the full suite, reuses a running test container, and refuses a foreign listener on port 5433 before starting anything. The CI path is unverified until the branch is pushed.
+The files for an isolated, disposable PostgreSQL 16 test cluster are in place, for both local Windows runs and CI. Locally, the container initializes correctly with the custom `pg_hba.conf`, provisions `careerpilot_test_reader` exactly as in CI before, stays isolated from the development stack, and passes the full existing suite (314 passed). The helper's later safety patch has been verified locally: it passes the full suite, reuses a running test container, and refuses a foreign listener on port 5433 before starting anything. In CI (PR #2, run `39286486531`), all three jobs succeeded. `backend-tests` (26 s) started the isolated container on `ubuntu-latest` and ran pytest successfully. Its exact test count was not separately verified.

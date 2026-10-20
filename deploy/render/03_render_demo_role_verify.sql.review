@@ -1,0 +1,220 @@
+-- deploy/render/03_render_demo_role_verify.sql
+-- Render production: verify careerpilot_demo_reader is SELECT-only.
+-- REVIEW DRAFT ONLY - NOT APPROVED FOR EXECUTION.
+--
+-- Read-only catalog checks, run as careerpilot_owner. Included by 02
+-- inside its transaction, or run on its own inside BEGIN READ ONLY ...
+-- ROLLBACK for re-verification. Adapted from the Stage B verifier
+-- (backend/tests/sql/05_test_demo_login_verify.sql.review) for a managed,
+-- non-superuser owner:
+-- - pg_authid is unreadable, so the password state is not checked here.
+-- - On PostgreSQL 16 a CREATEROLE owner is automatically granted ADMIN on
+--   roles it creates. That one membership (member = owner) is expected;
+--   the reader must not be a member of any role.
+-- - Large-object functions cannot be revoked by the owner (see 02).
+-- The API's own startup check (verify_demo_role_privileges, run as the
+-- reader itself) remains the final authority before the demo serves.
+
+\set ON_ERROR_STOP on
+
+DO $$
+DECLARE
+    v_role oid;
+    v_owner oid;
+    v_relation record;
+    v_priv text;
+BEGIN
+    IF current_database() IS DISTINCT FROM 'careerpilot_demo'
+       OR current_user IS DISTINCT FROM 'careerpilot_owner'
+       OR current_setting('server_version_num')::integer / 10000 <> 16
+    THEN
+        RAISE EXCEPTION 'Refusing: unexpected Render target identity';
+    END IF;
+
+    SELECT oid INTO STRICT v_role
+    FROM pg_roles WHERE rolname = 'careerpilot_demo_reader';
+    SELECT oid INTO STRICT v_owner
+    FROM pg_roles WHERE rolname = current_user;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_roles
+        WHERE oid = v_role
+          AND rolcanlogin
+          AND NOT rolsuper
+          AND NOT rolcreatedb
+          AND NOT rolcreaterole
+          AND NOT rolinherit
+          AND NOT rolreplication
+          AND NOT rolbypassrls
+          AND rolconnlimit = 10
+    ) THEN
+        RAISE EXCEPTION 'Refusing: unsafe demo role attributes';
+    END IF;
+
+    -- The reader is a member of nothing; only the owner may hold the
+    -- automatic ADMIN membership on it.
+    IF EXISTS (
+        SELECT 1 FROM pg_auth_members
+        WHERE member = v_role
+           OR grantor = v_role
+           OR (roleid = v_role AND member <> v_owner)
+    ) THEN
+        RAISE EXCEPTION 'Refusing: unexpected demo role membership';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM pg_db_role_setting WHERE setrole = v_role
+    ) THEN
+        RAISE EXCEPTION 'Refusing: unexpected demo role settings';
+    END IF;
+
+    IF has_database_privilege(v_role, current_database(), 'CONNECT') IS NOT TRUE
+       OR has_schema_privilege(v_role, 'public', 'USAGE') IS NOT TRUE
+    THEN
+        RAISE EXCEPTION 'Refusing: required database/schema access missing';
+    END IF;
+
+    IF has_database_privilege(v_role, current_database(), 'CREATE') IS NOT FALSE
+       OR has_database_privilege(v_role, current_database(), 'TEMPORARY') IS NOT FALSE
+    THEN
+        RAISE EXCEPTION 'Refusing: database CREATE or TEMPORARY privilege';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM pg_namespace
+        WHERE has_schema_privilege(v_role, oid, 'CREATE') IS NOT FALSE
+    ) THEN
+        RAISE EXCEPTION 'Refusing: schema CREATE privilege';
+    END IF;
+
+    -- SELECT on every application relation in public.
+    FOR v_relation IN
+        SELECT c.oid, c.relname
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+    LOOP
+        IF has_table_privilege(v_role, v_relation.oid, 'SELECT') IS NOT TRUE THEN
+            RAISE EXCEPTION 'Refusing: SELECT missing on public.%', v_relation.relname;
+        END IF;
+    END LOOP;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relname = 'job_applications'
+    ) THEN
+        RAISE EXCEPTION 'Refusing: public.job_applications is missing';
+    END IF;
+
+    -- No write privilege on any relation in this database. PostgreSQL
+    -- grants UPDATE on pg_catalog.pg_settings to PUBLIC (equivalent to
+    -- SET); that single case is allowed, as in the API's startup check.
+    FOR v_relation IN
+        SELECT c.oid, n.nspname, c.relname
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+    LOOP
+        FOREACH v_priv IN ARRAY ARRAY[
+            'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER',
+            'SELECT WITH GRANT OPTION'
+        ]
+        LOOP
+            IF has_table_privilege(v_role, v_relation.oid, v_priv) IS NOT FALSE
+               AND NOT (
+                   v_relation.nspname = 'pg_catalog'
+                   AND v_relation.relname = 'pg_settings'
+                   AND v_priv = 'UPDATE'
+               )
+            THEN
+                RAISE EXCEPTION 'Refusing: % on %.%',
+                    v_priv, v_relation.nspname, v_relation.relname;
+            END IF;
+        END LOOP;
+    END LOOP;
+
+    -- No sequence access (ids are never read or advanced by the demo).
+    FOR v_relation IN
+        SELECT oid, relname FROM pg_class WHERE relkind = 'S'
+    LOOP
+        FOREACH v_priv IN ARRAY ARRAY['USAGE', 'SELECT', 'UPDATE']
+        LOOP
+            IF has_sequence_privilege(v_role, v_relation.oid, v_priv) IS NOT FALSE THEN
+                RAISE EXCEPTION 'Refusing: % on sequence %', v_priv, v_relation.relname;
+            END IF;
+        END LOOP;
+    END LOOP;
+
+    -- Default ACLs: the reader gets exactly non-grantable SELECT on future
+    -- owner tables in public, and PUBLIC gets no explicit default grants.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_default_acl d
+        CROSS JOIN LATERAL aclexplode(d.defaclacl) AS a
+        WHERE a.grantee = 0
+           OR (
+               a.grantee = v_role
+               AND NOT (
+                   d.defaclobjtype = 'r'
+                   AND d.defaclrole = v_owner
+                   AND d.defaclnamespace = 'public'::regnamespace
+                   AND a.privilege_type = 'SELECT'
+                   AND NOT a.is_grantable
+               )
+           )
+    ) THEN
+        RAISE EXCEPTION 'Refusing: default ACL grant outside the demo allowlist';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_default_acl d
+        CROSS JOIN LATERAL aclexplode(d.defaclacl) AS a
+        WHERE d.defaclrole = v_owner
+          AND d.defaclnamespace = 'public'::regnamespace
+          AND d.defaclobjtype = 'r'
+          AND a.grantee = v_role
+          AND a.privilege_type = 'SELECT'
+          AND NOT a.is_grantable
+    ) THEN
+        RAISE EXCEPTION 'Refusing: future-table SELECT grant missing';
+    END IF;
+
+    -- The reader owns nothing, anywhere in the cluster.
+    IF EXISTS (
+        SELECT 1 FROM pg_shdepend
+        WHERE refclassid = 'pg_authid'::regclass
+          AND refobjid = v_role
+          AND deptype = 'o'
+    ) OR EXISTS (
+        SELECT 1 FROM pg_class WHERE relowner = v_role
+    ) OR EXISTS (
+        SELECT 1 FROM pg_namespace WHERE nspowner = v_role
+    ) OR EXISTS (
+        SELECT 1 FROM pg_proc WHERE proowner = v_role
+    ) THEN
+        RAISE EXCEPTION 'Refusing: demo role owns objects';
+    END IF;
+
+    -- No executable SECURITY DEFINER functions outside the system schemas.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE p.prosecdef
+          AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+          AND has_function_privilege(v_role, p.oid, 'EXECUTE') IS NOT FALSE
+    ) THEN
+        RAISE EXCEPTION 'Refusing: executable SECURITY DEFINER function';
+    END IF;
+
+    IF has_function_privilege(v_role, 'pg_catalog.lo_create(oid)', 'EXECUTE') THEN
+        RAISE NOTICE
+            'Known residual: large-object creation is executable via PUBLIC '
+            '(only the superuser owner can revoke it).';
+    END IF;
+END
+$$;

@@ -7,11 +7,14 @@ CareerPilot runs in exactly one of two modes, selected by CAREERPILOT_MODE:
 - ``public_demo``: a publicly reachable demonstration instance.
 
 WARNING: public_demo is NOT SAFE TO DEPLOY yet. It blocks HTTP writes (see
-readonly.py), uses read-only database sessions, and at startup refuses a
-database role that is not strictly SELECT-only (database.py), but the
-SELECT-only demo role is not provisioned, and there is no rate limiting,
-resume input limits, or synthetic-data safeguards. Do not expose a
-public_demo instance until those are implemented and tested.
+readonly.py), uses read-only database sessions, rate limits and size limits
+requests (limits.py), caps resume input lengths (schemas.py), and at startup
+refuses a database role that is not strictly SELECT-only (database.py). The
+fictional seed lives in backend/scripts/seed_demo_data.py. But the
+SELECT-only demo role is not provisioned or verified on the hosting
+platform, and the rate limiter's client address behind the platform's
+proxy is unverified. Do not expose a public_demo instance until both are
+resolved and tested.
 
 public_demo database configuration (settings-level only): startup requires a
 non-empty CAREERPILOT_DEMO_DATABASE_URL, intended to hold the credentials of

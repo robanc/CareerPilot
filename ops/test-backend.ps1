@@ -3,32 +3,62 @@
 Runs the backend tests against the isolated test PostgreSQL container.
 
 .DESCRIPTION
-Starts (or reuses) the disposable PostgreSQL 16 container defined in
-docker-compose.test.yml, then runs pytest with POSTGRES_* pointing at it.
-The previous POSTGRES_* values of this PowerShell session are restored
+Runs pytest against the disposable PostgreSQL 16 container defined in
+docker-compose.test.yml, which must ALREADY be running and healthy. This
+script never creates, starts, stops, recreates, or removes a container and
+never runs docker compose; it only reads Docker state ("docker ps",
+"docker inspect", "docker volume ls", "docker network ls"). Start the
+container yourself when needed:
+
+  docker compose -p careerpilot-test -f docker-compose.test.yml up --detach --wait
+
+The previous values of every variable it sets or clears are restored
 afterwards, even after an error or Ctrl+C, so a later development
 "docker compose up" never sees the test values.
 
-Safety checks. They only read Docker and port state; they never stop,
-change, or remove anything. Any failure refuses the run (exit 3):
-- Before startup: the careerpilot-test project may contain at most one
-  container (service db-test), no volumes, and only its default network.
-  No other running container may publish host port 5433, and nothing else
-  may listen on it. A stopped container configured for 5433 only produces
-  a warning, because it cannot hold the port.
-- After startup: exactly one db-test container, running and healthy, with
-  image postgres:16-alpine, only 127.0.0.1:5433->5432/tcp, only its two
-  read-only bind mounts, no volumes, and a tmpfs data directory.
+Safety checks. Any failure refuses the run (exit 3):
+- The careerpilot-test project must contain exactly one container (service
+  db-test), no volumes, and only its default network. No other running
+  container may publish host port 5433, and nothing else may listen on it.
+  A stopped container configured for 5433 only produces a warning, because
+  it cannot hold the port.
+- That container must be running and healthy, with
+  image postgres:16-alpine and only 127.0.0.1:5433->5432/tcp. Its Compose
+  labels must name this repository's docker-compose.test.yml and working
+  directory, and it must not be a one-off container. Its command must be
+  exactly the test postgres command (hba_file and cluster_name), and its
+  only network the project's default network. It must have no volumes, a
+  tmpfs data directory, and exactly three read-only bind mounts, each from
+  its expected repository file: the Stage A scripts 01 and 02 (mounted as
+  single files into /docker-entrypoint-initdb.d) and pg_hba.conf.
 - Before pytest: a connection to 127.0.0.1:5433 with the test credentials
-  (the same endpoint pytest uses) must report
-  cluster_name = careerpilot-test and hba_file = /etc/careerpilot/pg_hba.conf.
+  (the same endpoint pytest uses) must report cluster_name =
+  careerpilot-test, hba_file = /etc/careerpilot/pg_hba.conf,
+  current_database() = careerpilot_test, current_user =
+  careerpilot_test_admin, PostgreSQL major version 16, and data_directory
+  = /var/lib/postgresql/data (the tmpfs mount).
+- Immediately before pytest starts, the same container (same ID) is checked
+  again in full.
 
-The test credentials are the fixed, non-secret values from
-docker-compose.test.yml. This script reads no .env values and prints none.
-database.py loads .env without overriding variables that are already set,
-so the values set here win for the pytest run.
+Environment for the pytest run (and the marker check):
+- POSTGRES_HOST/PORT/USER/PASSWORD/DB are set to the fixed, non-secret test
+  values from docker-compose.test.yml (127.0.0.1:5433, careerpilot_test).
+- PYTHON_DOTENV_DISABLED=1 disables python-dotenv, so database.py never
+  reads .env during the run: no POSTGRES_* or CAREERPILOT_* value from .env
+  can reach pytest.
+- CAREERPILOT_MODE=local, and the application database variables
+  (DATABASE_URL, CAREERPILOT_DEMO_DATABASE_URL,
+  CAREERPILOT_ADMIN_DATABASE_URL, CAREERPILOT_SEED_DATABASE_URL) and RENDER
+  are cleared.
+- The libpq PG* connection variables (PGHOST, PGHOSTADDR, PGSERVICE, ...)
+  are cleared, because libpq would otherwise apply them to connections that
+  leave them unspecified; PGHOSTADDR, for example, can redirect a
+  connection that names host 127.0.0.1.
+This script reads no .env file and never reads or prints the values it
+saves and restores.
 
-The container keeps running afterwards. Reset it with:
+The container keeps running afterwards. Reset it (deliberately, yourself)
+with:
 
   docker compose -p careerpilot-test -f docker-compose.test.yml down
 
@@ -72,14 +102,38 @@ $TestPort = '5433'
 $ProjectFilter = "label=com.docker.compose.project=$ProjectName"
 $ExpectedImage = 'postgres:16-alpine'
 $ExpectedNetwork = "${ProjectName}_default"
-$ExpectedBindMounts = '/docker-entrypoint-initdb.d:False,/etc/careerpilot/pg_hba.conf:False'
+# Container destination -> source file, relative to the repository root.
+# Exactly these, all read-only. Stage B drafts are never mounted.
+$ExpectedBindMounts = [ordered]@{
+    '/docker-entrypoint-initdb.d/01_test_reader_role.sql'   = 'backend\tests\sql\01_test_reader_role.sql'
+    '/docker-entrypoint-initdb.d/02_test_reader_grants.sql' = 'backend\tests\sql\02_test_reader_grants.sql'
+    '/etc/careerpilot/pg_hba.conf'                          = 'backend\tests\postgres\pg_hba.conf'
+}
+$ExpectedCommand = 'postgres|-c|hba_file=/etc/careerpilot/pg_hba.conf|-c|cluster_name=careerpilot-test'
 $ExpectedDataDir = '/var/lib/postgresql/data'
-$ExpectedMarkers = 'careerpilot-test|/etc/careerpilot/pg_hba.conf'
+$ExpectedMarkers = "careerpilot-test|/etc/careerpilot/pg_hba.conf|careerpilot_test|careerpilot_test_admin|16|$ExpectedDataDir"
 
-# Reads both markers through the same endpoint and credentials pytest will
-# use. Sent on stdin, so Windows PowerShell 5.1 does not mangle its quotes.
-# On failure it prints only the exception type: never a message, URL, or
-# credential.
+# libpq reads these when a connection leaves the setting unspecified, so
+# they could redirect or alter the marker check and pytest's connections.
+# Cleared for the run and restored afterwards; never read or printed.
+$LibpqVariables = @(
+    'PGHOST', 'PGHOSTADDR', 'PGPORT', 'PGDATABASE', 'PGUSER', 'PGPASSWORD',
+    'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE', 'PGSYSCONFDIR', 'PGOPTIONS',
+    'PGTARGETSESSIONATTRS', 'PGLOADBALANCEHOSTS', 'PGREQUIREAUTH'
+)
+
+# Application settings that select a mode or a database other than the
+# POSTGRES_* test target. Cleared for the run and restored afterwards;
+# never read or printed. (CAREERPILOT_MODE is set to local instead.)
+$AppVariables = @(
+    'DATABASE_URL', 'CAREERPILOT_DEMO_DATABASE_URL',
+    'CAREERPILOT_ADMIN_DATABASE_URL', 'CAREERPILOT_SEED_DATABASE_URL', 'RENDER'
+)
+
+# Reads the cluster identity through the same endpoint and credentials
+# pytest will use. Read-only: a single SELECT. Sent on stdin, so Windows
+# PowerShell 5.1 does not mangle its quotes. On failure it prints only the
+# exception type: never a message, URL, or credential.
 $MarkerCheck = @'
 import os
 import sys
@@ -96,12 +150,17 @@ try:
         connect_timeout=10,
     ) as conn:
         row = conn.execute(
-            "SELECT current_setting('cluster_name'), current_setting('hba_file')"
+            "SELECT current_setting('cluster_name'),"
+            " current_setting('hba_file'),"
+            " current_database(),"
+            " current_user,"
+            " current_setting('server_version_num')::integer / 10000,"
+            " current_setting('data_directory')"
         ).fetchone()
 except Exception as exc:
     print("marker check could not connect: " + type(exc).__name__, file=sys.stderr)
     sys.exit(1)
-print(row[0] + "|" + row[1])
+print("|".join(str(value) for value in row))
 '@
 
 function Write-Failure([string]$Message) {
@@ -229,6 +288,38 @@ function Assert-PortFree([object[]]$Containers) {
     throw "port $TestPort is already in use by $owners, not by the $ProjectName container."
 }
 
+# The only container this script will use: the project's existing db-test
+# container, already running and healthy, matching docker-compose.test.yml.
+# Read-only; it never creates, starts, stops, or recreates anything, so the
+# run is refused when the container is missing, stopped, or unhealthy.
+function Get-ExistingTestContainer {
+    $containers = @(Get-ProjectContainers)
+    Assert-ProjectComposition $containers
+    if ($containers.Count -ne 1) {
+        throw "project $ProjectName has no $ServiceName container. Start it yourself (docker compose -p $ProjectName -f docker-compose.test.yml up --detach --wait); this script never creates or starts containers."
+    }
+    $container = $containers[0]
+    if (-not $container.State.Running -or $container.State.Health.Status -ne 'healthy') {
+        throw "container $(Get-ContainerName $container) is not running and healthy (status '$($container.State.Status)', health '$($container.State.Health.Status)'). Start it yourself; this script never starts, restarts, or recreates containers."
+    }
+    Assert-TestContainer $container
+    $container
+}
+
+# Case-insensitive comparison of two full Windows paths. A missing or
+# differently shaped path (for example a WSL-style source) never matches.
+function Test-SamePath([string]$Actual, [string]$Expected) {
+    if ([string]::IsNullOrEmpty($Actual) -or [string]::IsNullOrEmpty($Expected)) { return $false }
+    try {
+        $actualFull = [System.IO.Path]::GetFullPath($Actual).TrimEnd('\')
+        $expectedFull = [System.IO.Path]::GetFullPath($Expected).TrimEnd('\')
+    }
+    catch {
+        return $false
+    }
+    [string]::Equals($actualFull, $expectedFull, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 # The container actually started must match docker-compose.test.yml.
 function Assert-TestContainer($Container) {
     $problems = @()
@@ -246,14 +337,55 @@ function Assert-TestContainer($Container) {
         $problems += "port bindings are not exactly 127.0.0.1:$TestPort->5432/tcp"
     }
 
+    # Compose identity: started from this repository's test compose file.
+    $labels = $Container.Config.Labels
+    $composeFile = Join-Path $repoRoot 'docker-compose.test.yml'
+    if ((Get-ProjectLabel $Container) -ne $ProjectName -or (Get-ServiceLabel $Container) -ne $ServiceName) {
+        $problems += "compose project/service labels are not $ProjectName/$ServiceName"
+    }
+    if (-not (Test-SamePath $labels.'com.docker.compose.project.config_files' $composeFile)) {
+        $problems += "compose config file label is not $composeFile"
+    }
+    if (-not (Test-SamePath $labels.'com.docker.compose.project.working_dir' $repoRoot)) {
+        $problems += "compose working directory label is not $repoRoot"
+    }
+    if ($labels.'com.docker.compose.oneoff' -ne 'False') {
+        $problems += 'is a one-off (compose run) container'
+    }
+
+    $command = @($Container.Config.Cmd) -join '|'
+    if ($command -ne $ExpectedCommand) {
+        $problems += "command is not the test postgres command (hba_file, cluster_name)"
+    }
+
+    $networks = @($Container.NetworkSettings.Networks.PSObject.Properties.Name)
+    if ($Container.HostConfig.NetworkMode -ne $ExpectedNetwork -or
+        $networks.Count -ne 1 -or $networks[0] -ne $ExpectedNetwork) {
+        $problems += "networks are '$($networks -join ', ')', expected only $ExpectedNetwork"
+    }
+
     $otherMounts = @($Container.Mounts | Where-Object { $_.Type -ne 'bind' })
     if ($otherMounts.Count -gt 0) {
         $problems += "has non-bind mounts: $(($otherMounts | ForEach-Object { "$($_.Type) $($_.Destination)" }) -join ', ')"
     }
-    $bindMounts = ($Container.Mounts | Where-Object { $_.Type -eq 'bind' } |
-            ForEach-Object { "$($_.Destination):$($_.RW)" } | Sort-Object) -join ','
-    if ($bindMounts -ne $ExpectedBindMounts) {
-        $problems += "bind mounts are '$bindMounts'"
+
+    # Exactly the expected bind mounts: same destinations, each from its
+    # expected repository file, all read-only.
+    $bindMounts = @($Container.Mounts | Where-Object { $_.Type -eq 'bind' })
+    $destinations = ($bindMounts | ForEach-Object { $_.Destination } | Sort-Object) -join ','
+    $expectedDestinations = ($ExpectedBindMounts.Keys | Sort-Object) -join ','
+    if ($destinations -ne $expectedDestinations) {
+        $problems += "bind mount destinations are '$destinations', expected '$expectedDestinations'"
+    }
+    foreach ($mount in $bindMounts) {
+        if (-not $ExpectedBindMounts.Contains($mount.Destination)) { continue }
+        $expectedSource = Join-Path $repoRoot $ExpectedBindMounts[$mount.Destination]
+        if (-not (Test-SamePath $mount.Source $expectedSource)) {
+            $problems += "bind mount $($mount.Destination) is not from $expectedSource"
+        }
+        if ($mount.RW -ne $false) {
+            $problems += "bind mount $($mount.Destination) is writable"
+        }
     }
 
     $tmpfs = $Container.HostConfig.Tmpfs
@@ -273,23 +405,22 @@ function Assert-ClusterMarkers {
     }
     $actual = if ($output.Count -gt 0) { [string]$output[-1] } else { '' }
     if ($actual -ne $ExpectedMarkers) {
-        throw "127.0.0.1:$TestPort is not the isolated test cluster: cluster_name|hba_file is '$actual', expected '$ExpectedMarkers'."
+        throw "127.0.0.1:$TestPort is not the isolated test cluster: cluster_name|hba_file|database|user|major version|data_directory is '$actual', expected '$ExpectedMarkers'."
     }
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$composeArgs = @(
-    'compose',
-    '--project-name', $ProjectName,
-    '--file', (Join-Path $repoRoot 'docker-compose.test.yml')
-)
 $testEnv = [ordered]@{
-    POSTGRES_HOST     = '127.0.0.1'
-    POSTGRES_PORT     = $TestPort
-    POSTGRES_USER     = 'careerpilot_test_admin'
-    POSTGRES_PASSWORD = 'careerpilot_test_admin_password'
-    POSTGRES_DB       = 'careerpilot_test'
+    POSTGRES_HOST          = '127.0.0.1'
+    POSTGRES_PORT          = $TestPort
+    POSTGRES_USER          = 'careerpilot_test_admin'
+    POSTGRES_PASSWORD      = 'careerpilot_test_admin_password'
+    POSTGRES_DB            = 'careerpilot_test'
+    # database.py calls load_dotenv(); this makes python-dotenv skip .env.
+    PYTHON_DOTENV_DISABLED = '1'
+    CAREERPILOT_MODE       = 'local'
 }
+$clearedVariables = @($LibpqVariables) + @($AppVariables)
 
 # Exactly one pytest target: the default suite, or the one selected path.
 $selector = $Path.Trim()
@@ -316,39 +447,35 @@ foreach ($tool in 'docker', 'python') {
 }
 
 $saved = @{}
-foreach ($name in $testEnv.Keys) {
+foreach ($name in @($testEnv.Keys) + $clearedVariables) {
     $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 
 $exitCode = 1
 Push-Location -LiteralPath $repoRoot
 try {
-    # Before startup: read-only checks of the project and the port.
-    $before = @(Get-ProjectContainers)
-    Assert-ProjectComposition $before
+    # Read-only checks only: the existing container, the port, the project.
+    $container = Get-ExistingTestContainer
     Assert-NoOtherPublisher
-    Assert-PortFree $before
-
-    & docker @composeArgs up --detach --wait
-    if ($LASTEXITCODE -ne 0) {
-        throw "the isolated test database did not become healthy. Inspect it with: docker compose -p $ProjectName -f docker-compose.test.yml logs $ServiceName"
-    }
-
-    # After startup: the container that is actually running.
-    $after = @(Get-ProjectContainers)
-    Assert-ProjectComposition $after
-    if ($after.Count -ne 1) {
-        throw "project $ProjectName has no $ServiceName container after startup."
-    }
-    Assert-TestContainer $after[0]
-    Assert-NoOtherPublisher -NoWarning
+    Assert-PortFree @($container)
 
     foreach ($name in $testEnv.Keys) {
         [Environment]::SetEnvironmentVariable($name, $testEnv[$name], 'Process')
     }
+    # Setting a variable to $null removes it from this process.
+    foreach ($name in $clearedVariables) {
+        [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+    }
 
-    # Before pytest: the endpoint pytest will use is the isolated cluster.
+    # The endpoint pytest will use is the isolated cluster.
     Assert-ClusterMarkers
+
+    # Immediately before pytest: still the same, healthy, matching container.
+    $recheck = Get-ExistingTestContainer
+    if ($recheck.Id -ne $container.Id) {
+        throw "the $ServiceName container changed (different container ID) during the checks."
+    }
+    Assert-NoOtherPublisher -NoWarning
 
     & python -m pytest $selector -v
     $exitCode = $LASTEXITCODE

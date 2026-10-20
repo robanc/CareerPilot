@@ -17,8 +17,9 @@ Two independent layers block writes when CAREERPILOT_MODE=public_demo:
 In local mode both layers are inert and full CRUD is available.
 
 WARNING: this is HTTP-level protection only. It does not make the database
-read-only, rate-limit requests, or restrict resume input. POST /resume/match
-is allowed but is NOT safe to expose publicly yet.
+read-only. Rate limiting and the request body size limit live in limits.py,
+and resume input lengths are capped in schemas.py. public_demo is still NOT
+SAFE TO DEPLOY until the SELECT-only demo role is provisioned and verified.
 """
 
 import json
@@ -62,7 +63,13 @@ def is_request_allowed(method: str, path: str) -> bool:
     return method == "POST" and path in ALLOWED_POST_PATHS
 
 
-async def _send_json(send: Send, status_code: int, detail: str) -> None:
+async def send_json_error(
+    send: Send,
+    status_code: int,
+    detail: str,
+    headers: tuple[tuple[bytes, bytes], ...] = (),
+) -> None:
+    """Send a complete {"detail": ...} JSON response from ASGI middleware."""
     body = json.dumps({"detail": detail}).encode("utf-8")
     await send(
         {
@@ -71,6 +78,7 @@ async def _send_json(send: Send, status_code: int, detail: str) -> None:
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode("ascii")),
+                *headers,
             ],
         }
     )
@@ -93,7 +101,7 @@ class ReadOnlyMiddleware:
         except SettingsError:
             # Fail closed: an invalid mode never falls back to local.
             if scope["type"] == "http":
-                await _send_json(
+                await send_json_error(
                     send, status.HTTP_503_SERVICE_UNAVAILABLE, CONFIG_ERROR_MESSAGE
                 )
             else:
@@ -110,7 +118,7 @@ class ReadOnlyMiddleware:
             return
 
         if not is_request_allowed(scope["method"], scope["path"]):
-            await _send_json(send, status.HTTP_403_FORBIDDEN, READ_ONLY_MESSAGE)
+            await send_json_error(send, status.HTTP_403_FORBIDDEN, READ_ONLY_MESSAGE)
             return
 
         await self.app(scope, receive, send)

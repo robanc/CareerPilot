@@ -2,3 +2,6 @@
 # (docker-compose.test.yml) keep LF line endings on Windows checkouts.
 backend/tests/sql/*.sql            text eol=lf
 backend/tests/postgres/pg_hba.conf text eol=lf
+
+# Shell scripts run by bash (CI runners and Git Bash), which rejects CRLF.
+ops/*.sh                           text eol=lf

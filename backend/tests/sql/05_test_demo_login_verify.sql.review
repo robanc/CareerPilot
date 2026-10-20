@@ -1,0 +1,410 @@
+-- backend/tests/sql/05_test_demo_login_verify.sql
+-- Stage B: restricted test LOGIN privilege verifier
+-- REVIEW DRAFT ONLY - DO NOT EXECUTE
+-- PostgreSQL 16; run as careerpilot_test_admin.
+-- Must be called inside Script 04's transaction.
+
+\set ON_ERROR_STOP on
+
+DO $$
+DECLARE
+    v_role oid;
+    v_relation record;
+    v_schema record;
+    v_function record;
+    v_priv text;
+BEGIN
+    -- Cluster identity.
+    IF current_user IS DISTINCT FROM 'careerpilot_test_admin'
+       OR current_database() IS DISTINCT FROM 'careerpilot_test'
+       OR current_setting('cluster_name')
+          IS DISTINCT FROM 'careerpilot-test'
+       OR current_setting('hba_file')
+          IS DISTINCT FROM '/etc/careerpilot/pg_hba.conf'
+       OR NOT EXISTS (
+           SELECT 1 FROM pg_roles
+           WHERE rolname = current_user AND rolsuper
+       )
+    THEN
+        RAISE EXCEPTION 'Refusing: unexpected test cluster';
+    END IF;
+
+    -- Require the exact isolated test database inventory.
+    IF (
+        SELECT count(*)
+        FROM pg_database
+    ) <> 4
+    OR (
+        SELECT count(*)
+        FROM pg_database
+        WHERE datname IN (
+            'careerpilot_test',
+            'postgres',
+            'template0',
+            'template1'
+        )
+    ) <> 4
+    THEN
+        RAISE EXCEPTION
+            'Refusing: unexpected database inventory';
+    END IF;
+
+    SELECT oid INTO STRICT v_role
+    FROM pg_roles
+    WHERE rolname = 'careerpilot_test_demo_login';
+
+
+    -- Require the exact disabled LOGIN role configuration.
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_authid
+        WHERE oid = v_role
+          AND rolpassword IS NULL
+          AND rolvaliduntil IS NOT DISTINCT FROM
+              '-infinity'::timestamptz
+          AND rolcanlogin
+          AND NOT rolsuper
+          AND NOT rolcreatedb
+          AND NOT rolcreaterole
+          AND NOT rolinherit
+          AND NOT rolreplication
+          AND NOT rolbypassrls
+          AND rolconnlimit = 5
+    ) THEN
+        RAISE EXCEPTION 'Refusing: unsafe test LOGIN role';
+    END IF;
+
+
+    -- Reject unexpected role memberships.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_auth_members
+        WHERE member = v_role
+        OR roleid = v_role
+        OR grantor = v_role
+    ) THEN
+        RAISE EXCEPTION 'Refusing: unexpected role membership';
+    END IF;
+
+-- Reject settings affecting the test role or test database.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_db_role_setting
+        WHERE setrole IN (0, v_role)
+        AND setdatabase IN (
+            0,
+            (SELECT oid
+            FROM pg_database
+            WHERE datname = 'careerpilot_test')
+        )
+    ) THEN
+        RAISE EXCEPTION
+            'Refusing: unexpected role/database settings';
+    END IF;
+
+
+    -- Require the intended read access entry points.
+    IF has_database_privilege(
+           v_role, current_database(), 'CONNECT'
+       ) IS NOT TRUE
+       OR has_schema_privilege(
+           v_role, 'public', 'USAGE'
+       ) IS NOT TRUE
+    THEN
+        RAISE EXCEPTION
+            'Refusing: required database/schema access missing';
+    END IF;
+
+    -- No database CREATE or TEMPORARY privileges.
+    IF has_database_privilege(
+           v_role, current_database(), 'CREATE'
+       ) IS NOT FALSE
+       OR has_database_privilege(
+           v_role, current_database(), 'TEMPORARY'
+       ) IS NOT FALSE
+    THEN
+        RAISE EXCEPTION
+            'Refusing: database write privilege';
+    END IF;
+
+    -- No CREATE privilege in any schema.
+    FOR v_schema IN
+        SELECT oid FROM pg_namespace
+    LOOP
+        IF has_schema_privilege(
+               v_role, v_schema.oid, 'CREATE'
+           ) IS NOT FALSE
+        THEN
+            RAISE EXCEPTION
+                'Refusing: schema CREATE privilege';
+        END IF;
+    END LOOP;
+
+    -- Require SELECT on existing application tables and views.
+    -- This does not test actual query execution.
+    FOR v_relation IN
+        SELECT c.oid, n.nspname, c.relname
+        FROM pg_class c
+        JOIN pg_namespace n
+          ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+    LOOP
+        IF has_table_privilege(
+               v_role, v_relation.oid, 'SELECT'
+           ) IS NOT TRUE
+        THEN
+            RAISE EXCEPTION
+                'Refusing: SELECT missing on %.%',
+                v_relation.nspname,
+                v_relation.relname;
+        END IF;
+    END LOOP;
+
+    -- Reject relation write privileges.
+    -- PostgreSQL 16 exposes UPDATE on pg_catalog.pg_settings
+    -- through PUBLIC; allow only this specific system-view case.
+    -- This does not prove that changing server settings is
+    -- impossible; separately test the effective session rights.
+    -- Role memberships are rejected above.
+    FOR v_relation IN
+        SELECT c.oid, n.nspname, c.relname
+        FROM pg_class c
+        JOIN pg_namespace n
+          ON n.oid = c.relnamespace
+        WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+    LOOP
+        FOREACH v_priv IN ARRAY ARRAY[
+            'INSERT', 'UPDATE', 'DELETE',
+            'TRUNCATE', 'REFERENCES', 'TRIGGER'
+        ]
+        LOOP
+            IF has_table_privilege(
+                   v_role, v_relation.oid, v_priv
+               ) IS NOT FALSE
+            THEN
+                IF NOT (
+    v_relation.nspname = 'pg_catalog'
+    AND v_relation.relname = 'pg_settings'
+    AND v_priv = 'UPDATE'
+    AND EXISTS (
+        SELECT 1
+        FROM pg_class c
+        CROSS JOIN LATERAL
+            aclexplode(c.relacl) AS a
+        WHERE c.oid = v_relation.oid
+          AND a.grantee = 0
+          AND a.privilege_type = 'UPDATE'
+          AND NOT a.is_grantable
+    )
+    AND NOT EXISTS (
+        SELECT 1
+        FROM pg_class c
+        CROSS JOIN LATERAL
+            aclexplode(c.relacl) AS a
+        WHERE c.oid = v_relation.oid
+          AND a.grantee = v_role
+          AND a.privilege_type = 'UPDATE'
+    )
+) THEN
+                    RAISE EXCEPTION
+                        'Refusing: relation privilege % on %.%',
+                        v_priv,
+                        v_relation.nspname,
+                        v_relation.relname;
+                END IF;
+            END IF;
+        END LOOP;
+    END LOOP;
+
+
+    -- No sequence access.
+    FOR v_relation IN
+        SELECT oid FROM pg_class WHERE relkind = 'S'
+    LOOP
+        FOREACH v_priv IN ARRAY ARRAY[
+            'USAGE', 'SELECT', 'UPDATE'
+        ]
+        LOOP
+            IF has_sequence_privilege(
+                   v_role, v_relation.oid, v_priv
+               ) IS NOT FALSE
+            THEN
+                RAISE EXCEPTION
+                    'Refusing: sequence privilege % on %',
+                    v_priv, v_relation.oid;
+            END IF;
+        END LOOP;
+    END LOOP;
+
+
+
+    -- Allowlist explicit default ACL grants:
+    -- PUBLIC gets no explicit default grants; the demo LOGIN may
+    -- receive only non-grantable SELECT on tables created by the
+    -- test administrator in public. Other grantees are not
+    -- evaluated here and require a separate policy review.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_default_acl d
+        CROSS JOIN LATERAL aclexplode(d.defaclacl) AS a
+        WHERE a.grantee = 0
+           OR (
+               a.grantee = v_role
+               AND NOT (
+                   d.defaclobjtype = 'r'
+                   AND d.defaclrole = (
+                       SELECT oid FROM pg_roles
+                       WHERE rolname = 'careerpilot_test_admin'
+                   )
+                   AND d.defaclnamespace = (
+                       SELECT oid FROM pg_namespace
+                       WHERE nspname = 'public'
+                   )
+                   AND a.privilege_type = 'SELECT'
+                   AND NOT a.is_grantable
+               )
+           )
+    ) THEN
+        RAISE EXCEPTION
+            'Refusing: default ACL grant outside demo allowlist';
+    END IF;
+
+
+    -- Require the intended future-table SELECT grant.
+    -- Only tables created by careerpilot_test_admin
+    -- in the public schema are covered by Script 04.
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_default_acl d
+        JOIN pg_roles owner_role
+          ON owner_role.oid = d.defaclrole
+        JOIN pg_namespace n
+          ON n.oid = d.defaclnamespace
+        CROSS JOIN LATERAL
+            aclexplode(d.defaclacl) AS a
+        WHERE owner_role.rolname = 'careerpilot_test_admin'
+          AND n.nspname = 'public'
+          AND d.defaclobjtype = 'r'
+          AND a.grantee = v_role
+          AND a.privilege_type = 'SELECT'
+          AND NOT a.is_grantable
+    ) THEN
+        RAISE EXCEPTION
+            'Refusing: required future-table SELECT grant missing';
+    END IF;
+
+
+    -- Reject object ownership in the current database and
+    -- shared ownership dependencies across the cluster.
+    IF EXISTS (
+        SELECT 1 FROM pg_database WHERE datdba = v_role
+    ) OR EXISTS (
+        SELECT 1 FROM pg_namespace WHERE nspowner = v_role
+    ) OR EXISTS (
+        SELECT 1 FROM pg_class WHERE relowner = v_role
+    ) OR EXISTS (
+        SELECT 1 FROM pg_proc WHERE proowner = v_role
+    ) OR EXISTS (
+        SELECT 1 FROM pg_type WHERE typowner = v_role
+    ) OR EXISTS (
+        SELECT 1
+        FROM pg_shdepend
+        WHERE refclassid = 'pg_authid'::regclass
+          AND refobjid = v_role
+          AND deptype = 'o'
+    ) THEN
+        RAISE EXCEPTION
+            'Refusing: test LOGIN owns a database object';
+    END IF;
+
+
+    -- Large-object compatibility must remain disabled.
+    IF current_setting('lo_compat_privileges') <> 'off'
+    THEN
+        RAISE EXCEPTION 'Refusing: unsafe large-object setting';
+    END IF;
+
+    -- Large-object creation functions must not be executable.
+    FOR v_function IN
+        SELECT oid
+        FROM pg_proc
+        WHERE oid IN (
+            'pg_catalog.lo_create(oid)'::regprocedure,
+            'pg_catalog.lo_creat(integer)'::regprocedure,
+            'pg_catalog.lo_from_bytea(oid,bytea)'::regprocedure
+        )
+    LOOP
+        IF has_function_privilege(
+               v_role, v_function.oid, 'EXECUTE'
+           ) IS NOT FALSE
+        THEN
+            RAISE EXCEPTION
+                'Refusing: large-object creation function executable';
+        END IF;
+    END LOOP;
+
+
+    -- Reject parsing errors in the current HBA file.
+    -- This does not verify HBA rule order, loaded configuration,
+    -- or actual authentication behavior. Test those separately.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_hba_file_rules
+        WHERE error IS NOT NULL
+    ) THEN
+        RAISE EXCEPTION
+            'Refusing: invalid HBA configuration';
+    END IF;
+
+
+
+    -- Reject execution of server-side large-object
+    -- import and export functions.
+    FOR v_function IN
+        SELECT oid
+        FROM pg_proc
+        WHERE oid IN (
+            'pg_catalog.lo_import(text)'::regprocedure,
+            'pg_catalog.lo_import(text,oid)'::regprocedure,
+            'pg_catalog.lo_export(oid,text)'::regprocedure
+        )
+    LOOP
+        IF has_function_privilege(
+               v_role, v_function.oid, 'EXECUTE'
+           ) IS NOT FALSE
+        THEN
+            RAISE EXCEPTION
+                'Refusing: large-object import/export executable';
+        END IF;
+    END LOOP;
+
+    -- Reject pre-existing large objects in this
+    -- isolated test database.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_largeobject_metadata
+    ) THEN
+        RAISE EXCEPTION
+            'Refusing: unexpected large objects in test database';
+    END IF;
+
+
+    -- Reject executable non-system SECURITY DEFINER functions.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE p.prosecdef
+          AND n.nspname NOT IN (
+              'pg_catalog', 'information_schema'
+          )
+          AND has_function_privilege(
+              v_role, p.oid, 'EXECUTE'
+          ) IS NOT FALSE
+    ) THEN
+        RAISE EXCEPTION
+            'Refusing: executable SECURITY DEFINER function';
+    END IF;
+END
+$$;

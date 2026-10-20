@@ -1,6 +1,7 @@
 
 from datetime import date, datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
@@ -78,9 +79,17 @@ class DashboardResponse(BaseModel):
     recent_applications: list[ApplicationResponse]
 
 
+# Upper bounds for resume matching input, in characters, in every mode.
+# A long resume is around 10,000 characters; the limit leaves headroom.
+RESUME_TEXT_MAX_LENGTH = 20_000
+JOB_DESCRIPTION_MAX_LENGTH = 20_000
+
+
 class ResumeMatchRequest(BaseModel):
-    resume_text: str = Field(min_length=1)
-    job_description: str = Field(min_length=1)
+    resume_text: str = Field(min_length=1, max_length=RESUME_TEXT_MAX_LENGTH)
+    job_description: str = Field(
+        min_length=1, max_length=JOB_DESCRIPTION_MAX_LENGTH
+    )
 
 
 class ResumeMatchResponse(BaseModel):
@@ -88,3 +97,12 @@ class ResumeMatchResponse(BaseModel):
     matched_keywords: list[str]
     missing_keywords: list[str]
     suggestions: list[str]
+
+
+class ConfigResponse(BaseModel):
+    mode: Literal["local", "public_demo"]
+    read_only: bool
+
+
+class VersionResponse(BaseModel):
+    commit: str | None

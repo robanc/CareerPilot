@@ -22,9 +22,9 @@
 # selected with -c hba_file. The development container's configuration is
 # not touched.
 #
-# Initialization: on every fresh start the image creates careerpilot_test
-# (owned by the test superuser) and runs every *.sql file in
-# backend/tests/sql in name order through the container-internal socket.
+# Initialization: on first initialization of an empty data directory,
+# PostgreSQL creates careerpilot_test and runs only the two mounted
+# Stage A SQL scripts (01 and 02). Stage B drafts are excluded.
 # Any script error stops initialization, so the container never becomes
 # healthy.
 #
@@ -51,7 +51,8 @@ services:
       - /var/lib/postgresql/data
     volumes:
       - ./backend/tests/postgres/pg_hba.conf:/etc/careerpilot/pg_hba.conf:ro
-      - ./backend/tests/sql:/docker-entrypoint-initdb.d:ro
+      - ./backend/tests/sql/01_test_reader_role.sql:/docker-entrypoint-initdb.d/01_test_reader_role.sql:ro
+      - ./backend/tests/sql/02_test_reader_grants.sql:/docker-entrypoint-initdb.d/02_test_reader_grants.sql:ro
     healthcheck:
       # TCP, not the socket: the image's initialization server listens on the
       # socket only, so this passes only after initialization has finished.

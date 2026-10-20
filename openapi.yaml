@@ -8,6 +8,11 @@ info:
     REST API for the CareerPilot job application tracking
     and resume matching platform.
 
+    In public_demo mode (CAREERPILOT_MODE=public_demo) every endpoint
+    except /health is rate limited (HTTP 429 with Retry-After), request
+    bodies larger than 262144 bytes are refused (HTTP 413), and writes are
+    refused (HTTP 403). None of these responses occur in local mode.
+
 servers:
   - url: http://localhost:8000
 
@@ -30,6 +35,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+
+  /config:
+    get:
+      tags: [Health]
+      operationId: getConfig
+      summary: Report the operating mode
+      description: |
+        Lets the frontend hide write actions in the read-only public demo.
+        Informational only; the backend enforces read-only mode itself.
+      responses:
+        '200':
+          description: Active operating mode
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /version:
+    get:
+      tags: [Health]
+      operationId: getVersion
+      summary: Report the deployed commit
+      description: |
+        The commit SHA of the running release (RENDER_GIT_COMMIT on Render),
+        or null when it is unknown. Used by the release smoke test.
+      responses:
+        '200':
+          description: Deployed commit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
   /applications:
     get:
@@ -178,8 +219,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ResumeMatchResponse'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '422':
           $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
 components:
   schemas:
@@ -190,6 +235,25 @@ components:
         status:
           type: string
           enum: [ok]
+
+    VersionResponse:
+      type: object
+      required: [commit]
+      properties:
+        commit:
+          type: string
+          pattern: '^[0-9a-f]{40}$'
+          nullable: true
+
+    ConfigResponse:
+      type: object
+      required: [mode, read_only]
+      properties:
+        mode:
+          type: string
+          enum: [local, public_demo]
+        read_only:
+          type: boolean
 
     ApplicationStatus:
       type: string
@@ -318,9 +382,11 @@ components:
         resume_text:
           type: string
           minLength: 1
+          maxLength: 20000
         job_description:
           type: string
           minLength: 1
+          maxLength: 20000
 
     ResumeMatchResponse:
       type: object
@@ -352,6 +418,29 @@ components:
           type: string
 
   responses:
+    TooManyRequests:
+      description: |
+        public_demo rate limit reached; retry after the number of seconds
+        in the Retry-After header. Never returned in local mode.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    PayloadTooLarge:
+      description: |
+        public_demo request body exceeds 262144 bytes. Never returned in
+        local mode.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
     ReadOnly:
       description: |
         The server is running in read-only public_demo mode

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "careerpilot": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["mcp-server/careerpilot_mcp.py"]
+    }
+  }
+}

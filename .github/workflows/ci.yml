@@ -6,6 +6,8 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  # Called by deploy.yml, so a deploy runs exactly these checks first.
+  workflow_call:
 
 # Read-only token: this workflow never writes to the repository,
 # publishes packages, or deploys.
@@ -46,9 +48,9 @@ jobs:
 
       # PostgreSQL 16 with the test-only pg_hba.conf, on 127.0.0.1:5433. On
       # its fresh (tmpfs) start the image creates careerpilot_test, owned by
-      # the test superuser, and runs backend/tests/sql/*.sql in name order
-      # (01 and 02 provision the SELECT-only NOLOGIN careerpilot_test_reader
-      # used by test_test_reader_role.py). Any script error stops the
+      # the test superuser, and runs the two mounted Stage A scripts, 01 and
+      # 02, which provision the SELECT-only NOLOGIN careerpilot_test_reader
+      # used by test_test_reader_role.py. Any script error stops the
       # container before it becomes healthy, so --wait fails this step.
       - name: Start isolated test PostgreSQL
         run: docker compose -p careerpilot-test -f docker-compose.test.yml up --detach --wait
@@ -88,8 +90,39 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Vitest with jsdom and a mocked fetch: no backend or network needed.
+      - name: Unit tests
+        run: npm test
+
       - name: Production build
         run: npm run build
+
+  # Guardrail hook, MCP server, custom agent, and skill/subagent definitions.
+  # Standard library only: no dependencies, no network, no database.
+  agent-extensions:
+    name: Agent extension tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Guardrail hook tests
+        run: python -m unittest discover -s agent-hooks/tests -v
+
+      - name: MCP server tests
+        run: python -m unittest discover -s mcp-server/tests -v
+
+      - name: Custom agent tests
+        run: python -m unittest discover -s custom-agent/tests -v
+
+      - name: Skill, subagent, and wiring checks
+        run: python -m unittest discover -s .agents/tests -v
 
   docker-build:
     name: Docker image build verification

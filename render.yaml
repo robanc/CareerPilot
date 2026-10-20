@@ -67,7 +67,7 @@ services:
       # Replace the host if Render assigns a different onrender.com name.
       - type: rewrite
         source: /api/*
-        destination: https://careerpilot-api.onrender.com/*
+        destination: https://careerpilot-api-66p9.onrender.com/*
     headers:
       - path: /version.json
         name: Cache-Control

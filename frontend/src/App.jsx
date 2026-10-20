@@ -2,30 +2,54 @@
 import { useEffect, useState } from 'react'
 import Applications from './Applications'
 import ResumeMatch from './ResumeMatch'
+import { getConfig, getDashboard } from './services/api'
 import './App.css'
 
 function App() {
   const [page, setPage] = useState('Dashboard')
   const [dashboard, setDashboard] = useState(null)
   const [dashboardError, setDashboardError] = useState('')
+  const [focusApplicationId, setFocusApplicationId] = useState(null)
+  const [config, setConfig] = useState(null)
+  const [configError, setConfigError] = useState(false)
+
+  // Write actions stay hidden until the server confirms it is writable.
+  // This is presentation only; the backend enforces read-only mode.
+  const readOnly = config === null || config.read_only
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    async function loadConfig() {
+      try {
+        setConfig(await getConfig({ signal: controller.signal }))
+      } catch (error) {
+        if (error.name !== 'AbortError') setConfigError(true)
+      }
+    }
+
+    loadConfig()
+    return () => controller.abort()
+  }, [])
 
   const pages = ['Dashboard', 'Applications', 'Resume Match']
+
+  function openPage(item) {
+    setFocusApplicationId(null)
+    setPage(item)
+  }
+
+  function openApplication(id) {
+    setFocusApplicationId(id)
+    setPage('Applications')
+  }
 
   useEffect(() => {
     const controller = new AbortController()
 
     async function loadDashboard() {
       try {
-        const response = await fetch(
-          `${import.meta.env.VITE_API_URL ?? '/api'}/dashboard`,
-          { signal: controller.signal }
-        )
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`)
-        }
-
-        const data = await response.json()
+        const data = await getDashboard({ signal: controller.signal })
         setDashboard(data)
         setDashboardError('')
       } catch (error) {
@@ -51,7 +75,7 @@ function App() {
             <button
               key={item}
               className={page === item ? 'active' : ''}
-              onClick={() => setPage(item)}
+              onClick={() => openPage(item)}
             >
               {item}
             </button>
@@ -60,6 +84,21 @@ function App() {
       </aside>
 
       <main className="main-content">
+        {config?.read_only && (
+          <div className="demo-banner" role="note">
+            <strong>Public demo: read-only.</strong> All applications shown
+            here are fictional. Creating, editing, and deleting applications
+            is disabled. Resume matching works, and the text you paste is not
+            stored.
+          </div>
+        )}
+        {configError && (
+          <div className="demo-banner" role="note">
+            Editing is unavailable because the server mode could not be
+            confirmed. Reload the page to try again.
+          </div>
+        )}
+
         <header>
           <h2>{page}</h2>
           <p>Take control of your next career move.</p>
@@ -105,6 +144,13 @@ function App() {
           {new Date(application.interview_at).toLocaleString()}
         </p>
         <p>Status: {application.status}</p>
+        <button
+          type="button"
+          className="link-button"
+          onClick={() => openApplication(application.id)}
+        >
+          View Application
+        </button>
       </div>
     ))}
   </div>
@@ -124,6 +170,13 @@ function App() {
         <p>{application.company_name}</p>
         <p>Status: {application.status}</p>
         <p>Applied: {application.application_date}</p>
+        <button
+          type="button"
+          className="link-button"
+          onClick={() => openApplication(application.id)}
+        >
+          View Application
+        </button>
       </div>
     ))}
   </div>
@@ -133,7 +186,10 @@ function App() {
               )}
             </>
           ) : page === 'Applications' ? (
-  <Applications />
+  <Applications
+    focusApplicationId={focusApplicationId}
+    readOnly={readOnly}
+  />
 ) : (
   <ResumeMatch />
 )}

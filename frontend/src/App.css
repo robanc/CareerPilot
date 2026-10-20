@@ -171,7 +171,8 @@
 }
 
 .application-form input,
-.application-form select {
+.application-form select,
+.application-form textarea {
   width: 100%;
   min-width: 0;
   padding: 12px 14px;
@@ -182,10 +183,28 @@
   font-size: 15px;
 }
 
+.application-form textarea {
+  box-sizing: border-box;
+  font: inherit;
+  font-weight: 400;
+  resize: vertical;
+}
+
 .application-form input:focus,
-.application-form select:focus {
+.application-form select:focus,
+.application-form textarea:focus {
   outline: 2px solid #2563eb;
   outline-offset: 1px;
+}
+
+.application-form .form-wide {
+  grid-column: 1 / -1;
+}
+
+.application-form .form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 12px;
 }
 
 .application-form button {
@@ -231,6 +250,54 @@
 
 .application-item p {
   margin: 6px 0;
+}
+
+.application-item.focused {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px #bfdbfe;
+}
+
+.application-item .multiline {
+  white-space: pre-wrap;
+}
+
+.application-item .edit-form {
+  margin: 20px 0 0;
+}
+
+.link-button {
+  margin-top: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #2563eb;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+.demo-banner {
+  margin-bottom: 20px;
+  padding: 14px 18px;
+  border: 1px solid #fcd34d;
+  border-radius: 10px;
+  background: #fffbeb;
+  color: #78350f;
+}
+
+.read-only-note {
+  padding: 14px 18px;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+.heuristic-note {
+  color: #475569;
+  font-size: 14px;
 }
 
 /* Mobile Layout */

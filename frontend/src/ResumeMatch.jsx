@@ -1,7 +1,19 @@
 
 import { useState } from 'react'
+import { matchResume } from './services/api'
 
-const API_URL = import.meta.env.VITE_API_URL ?? '/api'
+// Matches the backend limits in schemas.py (the backend enforces them).
+export const MAX_INPUT_LENGTH = 20000
+
+function errorMessage(status) {
+  if (status === 429) {
+    return 'Too many match requests. Please wait a minute and try again.'
+  }
+  if (status === 413 || status === 422) {
+    return `Each text can be at most ${MAX_INPUT_LENGTH.toLocaleString('en-US')} characters.`
+  }
+  return 'Unable to analyze resume. Please try again.'
+}
 
 function ResumeMatch() {
   const [resumeText, setResumeText] = useState('')
@@ -17,22 +29,9 @@ function ResumeMatch() {
     setResult(null)
 
     try {
-      const response = await fetch(`${API_URL}/resume/match`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          resume_text: resumeText,
-          job_description: jobDescription,
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
-      }
-
-      setResult(await response.json())
-    } catch {
-      setError('Unable to analyze resume. Please try again.')
+      setResult(await matchResume(resumeText, jobDescription))
+    } catch (err) {
+      setError(errorMessage(err.status))
     } finally {
       setLoading(false)
     }
@@ -42,6 +41,10 @@ function ResumeMatch() {
     <div>
       <h3>Resume Match Analysis</h3>
       <p>Compare your resume against a job description to identify matching and missing skills.</p>
+      <p className="heuristic-note">
+        Up to {MAX_INPUT_LENGTH.toLocaleString('en-US')} characters each. Text
+        is analyzed and discarded; it is not stored.
+      </p>
 
       <form className="resume-form" onSubmit={handleSubmit}>
         <label>
@@ -49,6 +52,7 @@ function ResumeMatch() {
           <textarea
             required
             rows={8}
+            maxLength={MAX_INPUT_LENGTH}
             value={resumeText}
             onChange={(event) => setResumeText(event.target.value)}
             placeholder="Paste your resume text here..."
@@ -60,6 +64,7 @@ function ResumeMatch() {
           <textarea
             required
             rows={8}
+            maxLength={MAX_INPUT_LENGTH}
             value={jobDescription}
             onChange={(event) => setJobDescription(event.target.value)}
             placeholder="Paste the job description here..."
@@ -76,11 +81,16 @@ function ResumeMatch() {
       {result && (
         <div className="resume-results">
           <h3>Match Results</h3>
-          <h2>{result.score}% Match</h2>
+          <h2>Heuristic Match Score: {result.score}%</h2>
+          <p className="heuristic-note">
+            This score comes from a simple keyword comparison between your
+            resume and the job description. It is a heuristic estimate, not
+            an assessment of your suitability for the role.
+          </p>
           <div
   className="match-progress"
   role="progressbar"
-  aria-label="Resume match score"
+  aria-label="Heuristic resume match score"
   aria-valuenow={result.score}
   aria-valuemin={0}
   aria-valuemax={100}

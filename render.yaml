@@ -1,0 +1,83 @@
+# Render Blueprint for the CareerPilot public demo.
+# NOT YET APPROVED FOR USE: public_demo is NOT SAFE TO DEPLOY until the steps
+# in docs/deployment-render.md are complete. This file contains no secrets.
+#
+# - No service auto-deploys. Deploys happen only through the approved
+#   GitHub Actions workflow (.github/workflows/deploy.yml), which calls
+#   Render deploy hooks after every CI check passes.
+# - The API never receives the owner connection string. Its only database
+#   setting, CAREERPILOT_DEMO_DATABASE_URL, is entered by hand and must use
+#   the SELECT-only careerpilot_demo_reader role (deploy/render/). The API
+#   refuses to start with DATABASE_URL set or with a role that can write.
+# - The database accepts no external connections by default; add your own
+#   /32 temporarily for provisioning and remove it afterwards.
+
+databases:
+  - name: careerpilot-db
+    databaseName: careerpilot_demo
+    user: careerpilot_owner
+    # Free Render Postgres instances expire after a fixed period; see the
+    # deployment guide before relying on this plan beyond the demo.
+    plan: free
+    postgresMajorVersion: "16"
+    region: oregon
+    ipAllowList: []
+
+services:
+  - type: web
+    name: careerpilot-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    autoDeployTrigger: "off"
+    envVars:
+      - key: CAREERPILOT_MODE
+        value: public_demo
+      # The uvicorn command in backend/Dockerfile listens on 8000.
+      - key: PORT
+        value: "8000"
+      # Pinned: Render's native Python runtime sets FORWARDED_ALLOW_IPS=*,
+      # which makes uvicorn take the client-chosen leftmost X-Forwarded-For
+      # entry and lets anyone bypass the per-client rate limit. The Docker
+      # runtime does not set it; this pins uvicorn's own default.
+      - key: FORWARDED_ALLOW_IPS
+        value: "127.0.0.1,::1"
+      # Internal URL of the SELECT-only reader role. Entered by hand, never
+      # fromDatabase (that would be the owner's credentials).
+      - key: CAREERPILOT_DEMO_DATABASE_URL
+        sync: false
+
+  - type: web
+    name: careerpilot-web
+    runtime: static
+    # write-version.mjs records RENDER_GIT_COMMIT in dist/version.json so
+    # the release smoke test can confirm which commit is live.
+    buildCommand: cd frontend && npm ci && npm run lint && npm test && npm run build && node scripts/write-version.mjs
+    staticPublishPath: ./frontend/dist
+    autoDeployTrigger: "off"
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+    routes:
+      # Same-origin API access: the browser calls /api/..., and Render
+      # proxies it to the API service, so no CORS change is needed.
+      # Replace the host if Render assigns a different onrender.com name.
+      - type: rewrite
+        source: /api/*
+        destination: https://careerpilot-api.onrender.com/*
+    headers:
+      - path: /version.json
+        name: Cache-Control
+        value: no-store
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: no-referrer

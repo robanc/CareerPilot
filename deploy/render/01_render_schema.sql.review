@@ -1,0 +1,103 @@
+-- deploy/render/01_render_schema.sql
+-- Render production: create the CareerPilot schema as the database owner.
+-- REVIEW DRAFT ONLY - NOT APPROVED FOR EXECUTION.
+--
+-- public_demo never creates tables (backend/app/main.py), so the schema is
+-- created here, once, with the Render owner credentials, outside the API.
+-- Run only as described in docs/deployment-render.md, over Render's
+-- external, TLS-only connection, with ON_ERROR_STOP.
+--
+-- Target identity (all required, else nothing is changed):
+--   database careerpilot_demo, user careerpilot_owner (not a superuser),
+--   PostgreSQL 16, TCP connection with TLS, database owned by that user.
+-- A local Docker PostgreSQL fails these checks: its user is a superuser
+-- and its connections do not use TLS.
+--
+-- Idempotent: CREATE ... IF NOT EXISTS. Never drops or alters anything.
+-- The DDL between the markers must match backend/app/models.py; the test
+-- backend/tests/test_render_provisioning_sql.py compares them.
+
+\set ON_ERROR_STOP on
+
+BEGIN;
+
+SET LOCAL search_path = public;
+
+DO $$
+BEGIN
+    IF current_database() IS DISTINCT FROM 'careerpilot_demo'
+       OR current_user IS DISTINCT FROM 'careerpilot_owner'
+       OR session_user IS DISTINCT FROM current_user
+       OR current_setting('server_version_num')::integer / 10000 <> 16
+       OR inet_server_addr() IS NULL
+       OR NOT EXISTS (
+           SELECT 1 FROM pg_stat_ssl
+           WHERE pid = pg_backend_pid() AND ssl
+       )
+       OR NOT EXISTS (
+           SELECT 1 FROM pg_database
+           WHERE datname = current_database()
+             AND datdba = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+       )
+       OR EXISTS (
+           SELECT 1 FROM pg_roles
+           WHERE rolname = current_user AND rolsuper
+       )
+    THEN
+        RAISE EXCEPTION 'Refusing: unexpected Render target identity';
+    END IF;
+
+    -- An existing table must already belong to the owner.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname = 'job_applications'
+          AND c.relowner <> (SELECT oid FROM pg_roles WHERE rolname = current_user)
+    ) THEN
+        RAISE EXCEPTION 'Refusing: job_applications exists with another owner';
+    END IF;
+END
+$$;
+
+-- BEGIN SCHEMA DDL
+CREATE TABLE IF NOT EXISTS job_applications (
+    id SERIAL NOT NULL,
+    company_name VARCHAR(200) NOT NULL,
+    job_title VARCHAR(200) NOT NULL,
+    job_description TEXT,
+    application_date DATE NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    job_url TEXT,
+    notes TEXT,
+    interview_at TIMESTAMP WITH TIME ZONE,
+    interview_notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_job_applications_id ON job_applications (id);
+-- END SCHEMA DDL
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname IN ('job_applications', 'job_applications_id_seq')
+        GROUP BY true
+        HAVING count(*) = 2
+           AND bool_and(
+               c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+           )
+    ) THEN
+        RAISE EXCEPTION 'Refusing: schema objects missing or not owner-owned';
+    END IF;
+END
+$$;
+
+COMMIT;

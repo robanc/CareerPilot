@@ -1,0 +1,123 @@
+-- deploy/render/02_render_demo_role.sql
+-- Render production: SELECT-only LOGIN role for the public demo API.
+-- REVIEW DRAFT ONLY - NOT APPROVED FOR EXECUTION.
+--
+-- Prerequisites:
+-- 1. 01_render_schema.sql has created public.job_applications.
+-- 2. The read-only capability check in docs/deployment-render.md showed
+--    that careerpilot_owner has CREATEROLE and is not a superuser. Render
+--    does not document this; it must be confirmed on the real database.
+--
+-- Effects, all in one transaction, verified by 03 before COMMIT:
+-- - Creates careerpilot_demo_reader (LOGIN, no password yet, no special
+--   attributes, CONNECTION LIMIT 10). If it exists with exactly these
+--   attributes nothing changes; otherwise the script refuses. It never
+--   ALTERs an existing role.
+-- - PUBLIC loses TEMPORARY on careerpilot_demo and CREATE on schema public.
+-- - The role gets USAGE on schema public and SELECT on its tables, and
+--   SELECT on tables careerpilot_owner creates there later.
+--
+-- The password is set afterwards with psql's \password (hidden input, sent
+-- as a SCRAM hash, never in a statement log). See the deployment guide.
+--
+-- Not covered: large-object functions (lo_create and friends) stay
+-- executable by PUBLIC, because only their owner (Render's superuser) can
+-- revoke that. The API exposes no SQL, and every demo session starts read
+-- only, so this is a documented residual risk.
+
+\set ON_ERROR_STOP on
+
+BEGIN;
+
+SET LOCAL search_path = public;
+
+DO $$
+DECLARE
+    v_role record;
+BEGIN
+    IF current_database() IS DISTINCT FROM 'careerpilot_demo'
+       OR current_user IS DISTINCT FROM 'careerpilot_owner'
+       OR session_user IS DISTINCT FROM current_user
+       OR current_setting('server_version_num')::integer / 10000 <> 16
+       OR inet_server_addr() IS NULL
+       OR NOT EXISTS (
+           SELECT 1 FROM pg_stat_ssl
+           WHERE pid = pg_backend_pid() AND ssl
+       )
+       OR NOT EXISTS (
+           SELECT 1 FROM pg_database
+           WHERE datname = current_database()
+             AND datdba = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+       )
+       OR NOT EXISTS (
+           SELECT 1 FROM pg_roles
+           WHERE rolname = current_user
+             AND NOT rolsuper
+             AND rolcreaterole
+       )
+    THEN
+        RAISE EXCEPTION
+            'Refusing: unexpected Render target identity or no CREATEROLE';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname = 'job_applications'
+          AND c.relkind = 'r'
+          AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+    ) THEN
+        RAISE EXCEPTION 'Refusing: run 01_render_schema.sql first';
+    END IF;
+
+    SELECT * INTO v_role
+    FROM pg_roles
+    WHERE rolname = 'careerpilot_demo_reader';
+
+    IF NOT FOUND THEN
+        CREATE ROLE careerpilot_demo_reader
+            LOGIN
+            NOSUPERUSER
+            NOCREATEDB
+            NOCREATEROLE
+            NOINHERIT
+            NOREPLICATION
+            NOBYPASSRLS
+            CONNECTION LIMIT 10
+            PASSWORD NULL;
+    ELSIF NOT v_role.rolcanlogin
+       OR v_role.rolsuper
+       OR v_role.rolcreatedb
+       OR v_role.rolcreaterole
+       OR v_role.rolinherit
+       OR v_role.rolreplication
+       OR v_role.rolbypassrls
+       OR v_role.rolconnlimit IS DISTINCT FROM 10
+    THEN
+        RAISE EXCEPTION 'Refusing: careerpilot_demo_reader has unexpected attributes';
+    END IF;
+END
+$$;
+
+REVOKE TEMPORARY ON DATABASE careerpilot_demo FROM PUBLIC;
+
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+
+GRANT USAGE ON SCHEMA public TO careerpilot_demo_reader;
+
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO careerpilot_demo_reader;
+
+ALTER DEFAULT PRIVILEGES
+FOR ROLE careerpilot_owner
+IN SCHEMA public
+GRANT SELECT ON TABLES
+TO careerpilot_demo_reader;
+
+-- Verify before committing. psql must run with ON_ERROR_STOP.
+-- REVIEW SAFETY INTERLOCK: this include does not resolve while the files
+-- keep their .sql.review extensions. Prepare approved .sql copies first.
+\ir 03_render_demo_role_verify.sql
+
+COMMIT;

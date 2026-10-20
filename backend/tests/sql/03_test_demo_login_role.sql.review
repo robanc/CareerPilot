@@ -1,0 +1,177 @@
+-- backend/tests/sql/03_test_demo_login_role.sql
+-- Stage B: isolated test LOGIN role.
+-- REVIEW DRAFT ONLY - NOT APPROVED FOR EXECUTION.
+--
+-- Requires separate Docker safety preflight:
+-- verify project, container, endpoint, port, mounts and tmpfs.
+-- SQL cluster markers alone do not prove isolation.
+--
+-- Intended PostgreSQL version: 16.
+-- This script does not grant privileges or set a usable password.
+-- The role is created with PASSWORD NULL and expired validity.
+
+\set ON_ERROR_STOP on
+
+BEGIN;
+
+DO $$
+DECLARE
+    v_role_oid oid;
+    v_existing boolean;
+    v_bad_databases text;
+    v_role record;
+BEGIN
+    -- Require the exact isolated test identity.
+    IF current_user IS DISTINCT FROM 'careerpilot_test_admin'
+       OR current_database() IS DISTINCT FROM 'careerpilot_test'
+       OR current_setting('cluster_name')
+          IS DISTINCT FROM 'careerpilot-test'
+       OR current_setting('hba_file')
+          IS DISTINCT FROM '/etc/careerpilot/pg_hba.conf'
+       OR NOT EXISTS (
+           SELECT 1
+           FROM pg_roles
+           WHERE rolname = current_user
+             AND rolsuper
+       )
+    THEN
+        RAISE EXCEPTION 'Refusing: unexpected test cluster identity';
+    END IF;
+
+    -- Require the exact database inventory.
+    SELECT string_agg(datname, ', ' ORDER BY datname)
+    INTO v_bad_databases
+    FROM pg_database
+    WHERE datname NOT IN (
+        'careerpilot_test',
+        'postgres',
+        'template0',
+        'template1'
+    );
+
+    IF v_bad_databases IS NOT NULL
+       OR (
+           SELECT count(*)
+           FROM pg_database
+           WHERE datname IN (
+               'careerpilot_test',
+               'postgres',
+               'template0',
+               'template1'
+           )
+       ) <> 4
+    THEN
+        RAISE EXCEPTION 'Refusing: unexpected database inventory';
+    END IF;
+
+    -- Inspect the role without changing existing credentials.
+    SELECT oid
+    INTO v_role_oid
+    FROM pg_roles
+    WHERE rolname = 'careerpilot_test_demo_login';
+
+    v_existing := FOUND;
+
+    IF NOT v_existing THEN
+        CREATE ROLE careerpilot_test_demo_login
+            LOGIN
+            NOSUPERUSER
+            NOCREATEDB
+            NOCREATEROLE
+            NOINHERIT
+            NOREPLICATION
+            NOBYPASSRLS
+            CONNECTION LIMIT 5
+            PASSWORD NULL
+            VALID UNTIL '-infinity';
+
+        SELECT oid
+        INTO STRICT v_role_oid
+        FROM pg_roles
+        WHERE rolname = 'careerpilot_test_demo_login';
+    END IF;
+
+    -- pg_authid is superuser-only and exposes credential state.
+    -- Never print rolpassword.
+    SELECT
+        rolcanlogin,
+        rolsuper,
+        rolcreatedb,
+        rolcreaterole,
+        rolinherit,
+        rolreplication,
+        rolbypassrls,
+        rolconnlimit,
+        rolvaliduntil,
+        rolpassword IS NULL AS password_is_null
+    INTO STRICT v_role
+    FROM pg_authid
+    WHERE oid = v_role_oid;
+
+    IF NOT v_role.rolcanlogin
+       OR v_role.rolsuper
+       OR v_role.rolcreatedb
+       OR v_role.rolcreaterole
+       OR v_role.rolinherit
+       OR v_role.rolreplication
+       OR v_role.rolbypassrls
+       OR v_role.rolconnlimit IS DISTINCT FROM 5
+       OR v_role.rolvaliduntil
+          IS DISTINCT FROM '-infinity'::timestamptz
+       OR NOT v_role.password_is_null
+    THEN
+        RAISE EXCEPTION 'Refusing: unexpected test role attributes';
+    END IF;
+
+    -- No role membership in any direction.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_auth_members
+        WHERE member = v_role_oid
+           OR roleid = v_role_oid
+           OR grantor = v_role_oid
+    ) THEN
+        RAISE EXCEPTION 'Refusing: unexpected role membership';
+    END IF;
+
+    -- No role-specific or role/database settings.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_db_role_setting
+        WHERE setrole = v_role_oid
+    ) THEN
+        RAISE EXCEPTION 'Refusing: unexpected role settings';
+    END IF;
+
+    -- Reject ownership of databases, schemas and relations.
+    IF EXISTS (
+        SELECT 1 FROM pg_database
+        WHERE datdba = v_role_oid
+    ) OR EXISTS (
+        SELECT 1 FROM pg_namespace
+        WHERE nspowner = v_role_oid
+    ) OR EXISTS (
+        SELECT 1 FROM pg_class
+        WHERE relowner = v_role_oid
+    ) OR EXISTS (
+        SELECT 1 FROM pg_proc
+        WHERE proowner = v_role_oid
+    ) OR EXISTS (
+        SELECT 1 FROM pg_type
+        WHERE typowner = v_role_oid
+    ) THEN
+        RAISE EXCEPTION 'Refusing: unexpected object ownership';
+    END IF;
+
+    -- No existing sessions for the role.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_stat_activity
+        WHERE usesysid = v_role_oid
+    ) THEN
+        RAISE EXCEPTION 'Refusing: test role has active sessions';
+    END IF;
+END
+$$;
+
+COMMIT;

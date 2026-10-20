@@ -1,0 +1,119 @@
+name: Deploy
+
+# Manual, approved release of the public demo to Render. Nothing deploys
+# automatically: render.yaml disables auto-deploy, and this workflow runs
+# only when started by hand from main, with the confirmation typed in.
+#
+# Gates, in order:
+#   1. guard   - main branch only, and the confirmation input must be DEPLOY.
+#   2. verify  - the full CI workflow (backend tests, frontend lint/tests/
+#                build, Docker builds) on this exact commit.
+#   3. deploy  - runs in the "production" GitHub environment. Configure that
+#                environment with required reviewers and a main-only branch
+#                rule; GitHub then pauses here for explicit approval.
+#   4. smoke   - first waits until the API and the static site both report
+#                this exact commit (GET /version, /api/version through the
+#                web rewrite, /version.json) and fails if they never do, so
+#                it cannot pass on a previous release; then read-only checks.
+#
+# Secrets: RENDER_API_DEPLOY_HOOK and RENDER_WEB_DEPLOY_HOOK, stored ONLY as
+# production *environment* secrets (never repository secrets), so they are
+# released only to the approved deploy job. Deploy hook URLs are
+# credentials; they are never printed.
+# Variables: RENDER_API_URL and RENDER_WEB_URL, stored as *repository*
+# variables (they are public URLs): the smoke job does not use the
+# production environment, so environment variables would be empty there.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type DEPLOY to release this commit of main to Render
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Release guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require main and explicit confirmation
+        env:
+          REF: ${{ github.ref }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::Deploys run only from main (got $REF)."
+            exit 1
+          fi
+          if [ "$CONFIRM" != "DEPLOY" ]; then
+            echo "::error::Confirmation input must be exactly DEPLOY."
+            exit 1
+          fi
+
+  verify:
+    name: CI checks
+    needs: guard
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Trigger Render deploys
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: ${{ vars.RENDER_WEB_URL }}
+    steps:
+      - name: Deploy API, then web, at this commit
+        env:
+          API_HOOK: ${{ secrets.RENDER_API_DEPLOY_HOOK }}
+          WEB_HOOK: ${{ secrets.RENDER_WEB_DEPLOY_HOOK }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for name in API_HOOK WEB_HOOK; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not configured in the production environment."
+              exit 1
+            fi
+          done
+          trigger() {
+            local separator='?'
+            case "$2" in *\?*) separator='&' ;; esac
+            # The hook URL is never echoed; curl prints only the status code.
+            status=$(curl --silent --show-error --max-time 30 --request POST \
+              --output /dev/null --write-out '%{http_code}' "$2${separator}ref=$SHA")
+            echo "$1 deploy hook: HTTP $status"
+            case "$status" in 200|202) ;; *) exit 1 ;; esac
+          }
+          trigger api "$API_HOOK"
+          trigger web "$WEB_HOOK"
+
+  smoke:
+    name: Post-deploy smoke test
+    needs: deploy
+    runs-on: ubuntu-latest
+    # Up to 10 minutes for /health plus 20 for the commit to go live.
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      # Render builds asynchronously. The script refuses to check anything
+      # until every surface serves EXPECTED_COMMIT, and fails if that never
+      # happens (failed or stuck deploy, or an unknown commit).
+      - name: Confirm the deployed commit, then read-only checks
+        env:
+          API_URL: ${{ vars.RENDER_API_URL }}
+          WEB_URL: ${{ vars.RENDER_WEB_URL }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: bash ops/smoke-test-render.sh

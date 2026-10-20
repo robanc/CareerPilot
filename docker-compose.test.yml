@@ -1,0 +1,64 @@
+# Isolated, disposable PostgreSQL 16 for backend tests only.
+#
+# Always use it with an explicit project name, for example:
+#
+#   docker compose -p careerpilot-test -f docker-compose.test.yml up -d --wait
+#   docker compose -p careerpilot-test -f docker-compose.test.yml down
+#
+# Isolation from the development stack (docker-compose.yml):
+# - Separate project name, so separate containers and a separate network.
+#   "-p" overrides COMPOSE_PROJECT_NAME if one is set in the environment.
+# - Different service name (db-test), no container_name, no external
+#   networks, and no named volumes. The data directory is tmpfs, so every
+#   start is a fresh cluster and nothing persists after the container stops.
+# - Host port 5433 (development uses 5432), bound to 127.0.0.1 only.
+# - No ${...} interpolation, so no value from .env is ever used here.
+#
+# Contents: synthetic test data only. The credentials below are fixed,
+# non-secret test values (as the CI service used before). They grant
+# superuser on this throwaway container only.
+#
+# Authentication: backend/tests/postgres/pg_hba.conf, mounted read-only and
+# selected with -c hba_file. The development container's configuration is
+# not touched.
+#
+# Initialization: on first initialization of an empty data directory,
+# PostgreSQL creates careerpilot_test and runs only the two mounted
+# Stage A SQL scripts (01 and 02). Stage B drafts are excluded.
+# Any script error stops initialization, so the container never becomes
+# healthy.
+#
+# cluster_name is a marker that test-only role tooling can check to confirm
+# it is connected to this cluster and not to the development database.
+name: careerpilot-test
+
+services:
+  db-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: careerpilot_test_admin
+      POSTGRES_PASSWORD: careerpilot_test_admin_password
+      POSTGRES_DB: careerpilot_test
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/careerpilot/pg_hba.conf
+      - -c
+      - cluster_name=careerpilot-test
+    ports:
+      - "127.0.0.1:5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./backend/tests/postgres/pg_hba.conf:/etc/careerpilot/pg_hba.conf:ro
+      - ./backend/tests/sql/01_test_reader_role.sql:/docker-entrypoint-initdb.d/01_test_reader_role.sql:ro
+      - ./backend/tests/sql/02_test_reader_grants.sql:/docker-entrypoint-initdb.d/02_test_reader_grants.sql:ro
+    healthcheck:
+      # TCP, not the socket: the image's initialization server listens on the
+      # socket only, so this passes only after initialization has finished.
+      test:
+        - CMD-SHELL
+        - pg_isready -h 127.0.0.1 -U careerpilot_test_admin -d careerpilot_test
+      interval: 2s
+      timeout: 5s
+      retries: 30

@@ -106,3 +106,55 @@ class ConfigResponse(BaseModel):
 
 class VersionResponse(BaseModel):
     commit: str | None
+
+
+class ResumeCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    content: str = Field(
+        min_length=1,
+        max_length=RESUME_TEXT_MAX_LENGTH,
+    )
+
+    @model_validator(mode="after")
+    def validate_text(self):
+        if not self.name.strip():
+            raise ValueError("Resume name cannot be blank")
+        if not self.content.strip():
+            raise ValueError("Resume content cannot be blank")
+        return self
+
+
+class ResumeUpdate(BaseModel):
+    name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+    content: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=RESUME_TEXT_MAX_LENGTH,
+    )
+
+    @model_validator(mode="after")
+    def validate_update(self):
+        if not self.model_fields_set:
+            raise ValueError("At least one field must be provided")
+
+        for field in ("name", "content"):
+            if field in self.model_fields_set:
+                value = getattr(self, field)
+                if value is None or not value.strip():
+                    raise ValueError(
+                        f"{field} cannot be null or blank"
+                    )
+
+        return self
+
+
+class ResumeResponse(ResumeCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    created_at: datetime
+    updated_at: datetime

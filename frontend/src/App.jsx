@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import Applications from './Applications'
 import ResumeMatch from './ResumeMatch'
+import ResumeLibrary from './ResumeLibrary'
 import { getConfig, getDashboard } from './services/api'
 import './App.css'
 
@@ -32,7 +33,14 @@ function App() {
     return () => controller.abort()
   }, [])
 
-  const pages = ['Dashboard', 'Applications', 'Resume Match']
+
+  const pages = [
+    'Dashboard',
+    'Applications',
+    'Resume Match',
+    ...(!readOnly ? ['Resume Library'] : []),
+  ]
+
 
   function openPage(item) {
     setFocusApplicationId(null)
@@ -190,8 +198,18 @@ function App() {
     focusApplicationId={focusApplicationId}
     readOnly={readOnly}
   />
+
+
+) : page === 'Resume Match' ? (
+  <ResumeMatch
+    key={readOnly ? 'read-only' : 'local'}
+    readOnly={readOnly}
+  />
+) : page === 'Resume Library' && !readOnly ? (
+
+  <ResumeLibrary />
 ) : (
-  <ResumeMatch />
+  <p>This page is unavailable.</p>
 )}
         </section>
       </main>

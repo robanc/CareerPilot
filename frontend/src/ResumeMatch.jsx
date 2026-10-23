@@ -1,6 +1,6 @@
 
-import { useState } from 'react'
-import { matchResume } from './services/api'
+import { useEffect, useState } from 'react'
+import { listApplications, listResumes, matchResume } from './services/api'
 
 // Matches the backend limits in schemas.py (the backend enforces them).
 export const MAX_INPUT_LENGTH = 20000
@@ -15,12 +15,83 @@ function errorMessage(status) {
   return 'Unable to analyze resume. Please try again.'
 }
 
-function ResumeMatch() {
+function ResumeMatch({ readOnly = true }) {
   const [resumeText, setResumeText] = useState('')
   const [jobDescription, setJobDescription] = useState('')
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [savedApplications, setSavedApplications] = useState([])
+  const [savedLoadFailed, setSavedLoadFailed] = useState(false)
+  const [selectedApplicationId, setSelectedApplicationId] = useState('')
+  const [savedResumes, setSavedResumes] = useState([])
+  const [savedResumesLoadFailed, setSavedResumesLoadFailed] = useState(false)
+  const [selectedResumeId, setSelectedResumeId] = useState('')
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    async function loadSavedApplications() {
+      try {
+        const applications = await listApplications({
+          signal: controller.signal,
+        })
+        setSavedApplications(
+          applications.filter((app) => app.job_description?.trim())
+        )
+      } catch (err) {
+        if (err.name !== 'AbortError') setSavedLoadFailed(true)
+      }
+    }
+
+    loadSavedApplications()
+    return () => controller.abort()
+  }, [])
+
+
+  useEffect(() => {
+  if (readOnly) {
+    return
+  }
+
+    const controller = new AbortController()
+
+    async function loadSavedResumes() {
+      try {
+        const resumes = await listResumes({
+          signal: controller.signal,
+        })
+        if (!controller.signal.aborted) {
+          setSavedResumes(resumes)
+          setSavedResumesLoadFailed(false)
+        }
+      } catch {
+        if (!controller.signal.aborted) {
+          setSavedResumesLoadFailed(true)
+        }
+      }
+    }
+
+    loadSavedResumes()
+    return () => controller.abort()
+  }, [readOnly])
+
+
+  function handleSelectResume(event) {
+    const id = event.target.value
+    setSelectedResumeId(id)
+
+    const resume = savedResumes.find((item) => String(item.id) === id)
+    if (resume) setResumeText(resume.content)
+  }
+
+
+  function handleSelectApplication(event) {
+    const id = event.target.value
+    setSelectedApplicationId(id)
+    const application = savedApplications.find((app) => String(app.id) === id)
+    if (application) setJobDescription(application.job_description)
+  }
 
   async function handleSubmit(event) {
     event.preventDefault()
@@ -47,6 +118,31 @@ function ResumeMatch() {
       </p>
 
       <form className="resume-form" onSubmit={handleSubmit}>
+
+        {!readOnly && savedResumes.length > 0 && (
+          <label>
+            Saved Resume
+            <select
+              value={selectedResumeId}
+              onChange={handleSelectResume}
+            >
+              <option value="">Select a saved resume...</option>
+              {savedResumes.map((resume) => (
+                <option key={resume.id} value={String(resume.id)}>
+                  {resume.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {!readOnly && savedResumesLoadFailed && (
+          <p className="heuristic-note">
+            Saved resumes could not be loaded. You can still paste your
+            resume text below.
+          </p>
+        )}
+
+
         <label>
           Your Resume
           <textarea
@@ -58,6 +154,29 @@ function ResumeMatch() {
             placeholder="Paste your resume text here..."
           />
         </label>
+
+        {savedApplications.length > 0 && (
+          <label>
+            Saved Job Application
+            <select
+              value={selectedApplicationId}
+              onChange={handleSelectApplication}
+            >
+              <option value="">Select a saved application...</option>
+              {savedApplications.map((app) => (
+                <option key={app.id} value={String(app.id)}>
+                  {app.company_name} — {app.job_title}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {savedLoadFailed && (
+          <p className="heuristic-note">
+            Saved applications could not be loaded. You can still paste a job
+            description below.
+          </p>
+        )}
 
         <label>
           Job Description

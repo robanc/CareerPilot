@@ -56,3 +56,24 @@ export function matchResume(resumeText, jobDescription) {
     body: { resume_text: resumeText, job_description: jobDescription },
   })
 }
+
+
+export function listResumes({ signal } = {}) {
+  return request('/resumes', { signal })
+}
+
+export function getResume(id, { signal } = {}) {
+  return request(`/resumes/${id}`, { signal })
+}
+
+export function createResume(resume) {
+  return request('/resumes', { method: 'POST', body: resume })
+}
+
+export function updateResume(id, changes) {
+  return request(`/resumes/${id}`, { method: 'PATCH', body: changes })
+}
+
+export function deleteResume(id) {
+  return request(`/resumes/${id}`, { method: 'DELETE' })
+}

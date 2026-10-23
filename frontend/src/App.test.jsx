@@ -1,6 +1,7 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+import ResumeMatch from './ResumeMatch'
 import { makeApplication, mockFetch } from './test/mockFetch'
 
 const LOCAL_CONFIG = { mode: 'local', read_only: false }
@@ -137,5 +138,65 @@ describe('App public demo awareness', () => {
     await openApplications()
     expect(screen.queryByRole('button', { name: 'Add Application' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull()
+  })
+})
+
+
+describe('App Resume Match privacy', () => {
+  it('does not request saved resumes in public-demo mode', async () => {
+    const fetchMock = mockFetch({
+      'GET /config': DEMO_CONFIG,
+      'GET /dashboard': EMPTY_DASHBOARD,
+      'GET /applications': [],
+    })
+
+    render(<App />)
+
+    await screen.findByText(/Public demo: read-only/)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume Match' }))
+
+    expect(screen.getByLabelText('Your Resume')).toBeTruthy()
+    expect(screen.queryByLabelText('Saved Resume')).toBeNull()
+    expect(
+      fetchMock.mock.calls.some(([url]) => url.includes('/resumes'))
+    ).toBe(false)
+  })
+})
+
+
+describe('Resume Match mode transition', () => {
+  it('clears resume text when the mode changes', async () => {
+    mockFetch({
+      'GET /applications': [],
+      'GET /resumes': [],
+    })
+
+    function ModeSwitchTest({ readOnly }) {
+      return (
+        <ResumeMatch
+          key={readOnly ? 'read-only' : 'local'}
+          readOnly={readOnly}
+        />
+      )
+    }
+
+    const { rerender } = render(<ModeSwitchTest readOnly={false} />)
+
+    fireEvent.change(screen.getByLabelText('Your Resume'), {
+      target: { value: 'Private resume content' },
+    })
+
+    expect(screen.getByLabelText('Your Resume').value).toBe(
+      'Private resume content'
+    )
+
+    rerender(<ModeSwitchTest readOnly={true} />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Your Resume').value).toBe('')
+    })
+
+    expect(screen.queryByLabelText('Saved Resume')).toBeNull()
   })
 })

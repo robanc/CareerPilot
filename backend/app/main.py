@@ -17,6 +17,7 @@ from backend.app.readonly import ReadOnlyMiddleware, current_settings
 from backend.app.routers.applications import router as applications_router
 from backend.app.routers.dashboard import router as dashboard_router
 from backend.app.routers.resume import router as resume_router
+from backend.app.routers.resume_library import router as resume_library_router
 from backend.app.schemas import ConfigResponse, VersionResponse
 from backend.app.settings import load_settings
 
@@ -90,6 +91,7 @@ app.add_middleware(
 app.include_router(applications_router)
 app.include_router(dashboard_router)
 app.include_router(resume_router)
+app.include_router(resume_library_router)
 
 
 @app.get("/health", tags=["Health"])

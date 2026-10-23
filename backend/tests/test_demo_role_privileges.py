@@ -182,7 +182,10 @@ def test_required_table_is_checked_by_schema_and_name():
     demo_privilege_problems(connection)
 
     table_calls = [p for sql, p in connection.executed if sql == DEMO_TABLE_QUERY]
-    assert table_calls == [{"schema": "public", "name": "job_applications"}]
+    assert table_calls == [
+        {"schema": "public", "name": "job_applications"},
+        {"schema": "public", "name": "resumes"},
+    ]
 
 
 # --- identity and role attributes ------------------------------------------
@@ -380,7 +383,7 @@ def test_reports_every_problem_at_once():
 
     problems = problems_with(**overrides)
 
-    assert len(problems) == 3
+    assert len(problems) == 4
 
 
 def test_retries_connection_errors():

@@ -107,7 +107,7 @@ class FakeInspector:
         return name in self.existing
 
 
-def install_inspector(monkeypatch, existing=("job_applications",)):
+def install_inspector(monkeypatch, existing=("job_applications", "resumes")):
     calls = []
 
     def fake_inspect(target):
@@ -306,7 +306,7 @@ def test_verify_schema_retries_connection_errors(public_demo_env, monkeypatch):
         attempts.append(target)
         if len(attempts) < 3:
             raise OperationalError("SELECT 1", {}, Exception("not ready"))
-        return FakeInspector({"job_applications"})
+        return FakeInspector({"job_applications", "resumes"})
 
     monkeypatch.setattr(database, "inspect", flaky_inspect)
 

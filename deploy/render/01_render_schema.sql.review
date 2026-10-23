@@ -53,10 +53,10 @@ BEGIN
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
-          AND c.relname = 'job_applications'
+          AND c.relname IN ('job_applications', 'resumes')
           AND c.relowner <> (SELECT oid FROM pg_roles WHERE rolname = current_user)
     ) THEN
-        RAISE EXCEPTION 'Refusing: job_applications exists with another owner';
+        RAISE EXCEPTION 'Refusing: an application table exists with another owner';
     END IF;
 END
 $$;
@@ -79,6 +79,16 @@ CREATE TABLE IF NOT EXISTS job_applications (
 );
 
 CREATE INDEX IF NOT EXISTS ix_job_applications_id ON job_applications (id);
+CREATE TABLE IF NOT EXISTS resumes (
+    id SERIAL NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_resumes_id ON resumes (id);
 -- END SCHEMA DDL
 
 DO $$
@@ -88,9 +98,14 @@ BEGIN
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
-          AND c.relname IN ('job_applications', 'job_applications_id_seq')
+          AND c.relname IN (
+              'job_applications',
+              'job_applications_id_seq',
+              'resumes',
+              'resumes_id_seq'
+          )
         GROUP BY true
-        HAVING count(*) = 2
+        HAVING count(*) = 4
            AND bool_and(
                c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
            )

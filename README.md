@@ -15,6 +15,10 @@ API contract: [`openapi.yaml`](openapi.yaml). Engineering rules: [`AGENTS.md`](A
 - **Resume matching:** paste a resume and a job description to get a 0-100 score with matched
   and missing skills. It is labeled as a deterministic, keyword-based **heuristic**, not an
   assessment of suitability. Submitted text is neither stored nor logged.
+- **Resume Library (local mode only):** save, view, edit, and delete resumes.
+  Select a saved resume and an existing job application to run resume matching.
+  Saved resumes are stored in the local database. The library is unavailable
+  in public demo mode.
 - **Read-only public demo mode** (`CAREERPILOT_MODE=public_demo`): writes are refused, data is
   fictional, and requests are rate limited and size limited. The UI hides write actions and
   shows a banner.
@@ -117,8 +121,11 @@ The public read-only demo targets Render: the Blueprint [`render.yaml`](render.y
 
 - **Fictional data only:** the MVP has no authentication. Use fictional data everywhere; the
   public demo shows only the fictional seed (`backend/scripts/seed_demo_data.py`).
-- **Resume privacy:** resume text submitted for matching is never stored or logged. Each field
-  is limited to 20,000 characters.
+- **Resume privacy:** pasted resume text and job descriptions submitted for
+  matching are not stored or logged by the matching feature. Saved resumes
+  in the local-only Resume Library are intentionally persisted in PostgreSQL.
+  The Resume Library is disabled in public demo mode. Matching inputs are
+  limited to 20,000 characters per field.
 - **Public demo protections:** writes are blocked twice, by the middleware and by a check on
   each write route. Sessions start read-only, and startup verifies that the database role is
   strictly SELECT-only. Rate limiting and a 256 KiB request cap apply.

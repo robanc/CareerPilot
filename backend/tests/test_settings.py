@@ -253,3 +253,28 @@ def test_app_startup_refused_on_public_demo_database_misconfiguration(
     with pytest.raises(SettingsError, match="Refusing to start"):
         with TestClient(main_module.app):
             pass
+
+
+def test_metrics_disabled_by_default():
+    settings = load_settings({})
+
+    assert settings.metrics_enabled is False
+
+
+def test_metrics_can_be_enabled_in_local_mode():
+    settings = load_settings({
+        "CAREERPILOT_MODE": "local",
+        "CAREERPILOT_METRICS_ENABLED": "true",
+    })
+
+    assert settings.metrics_enabled is True
+
+
+def test_metrics_disabled_in_public_demo():
+    settings = load_settings({
+        **PUBLIC_DEMO_ENV,
+        "CAREERPILOT_METRICS_ENABLED": "true",
+    })
+
+    assert settings.is_public_demo is True
+    assert settings.metrics_enabled is False

@@ -4,6 +4,7 @@
 import json
 import re
 
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -159,3 +160,73 @@ def test_prometheus_request_duration_histogram_records_request():
 
     assert response.status_code == 200
     assert after == before + 1
+
+
+def test_metrics_endpoint_disabled_by_default():
+    from backend.app.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/metrics")
+
+    assert response.status_code == 404
+
+
+def test_metrics_endpoint_available_when_enabled_locally(monkeypatch):
+    from backend.app.main import app
+
+    monkeypatch.setenv("CAREERPILOT_MODE", "local")
+    monkeypatch.setenv("CAREERPILOT_METRICS_ENABLED", "true")
+
+    with TestClient(app, client=("127.0.0.1", 50000)) as client:
+        response = client.get("/metrics")
+
+    assert response.status_code == 200
+    assert "careerpilot_http_requests_total" in response.text
+
+
+def test_metrics_endpoint_rejects_external_client(monkeypatch):
+    from backend.app.main import app
+
+    monkeypatch.setenv("CAREERPILOT_MODE", "local")
+    monkeypatch.setenv("CAREERPILOT_METRICS_ENABLED", "true")
+
+    with TestClient(app, client=("203.0.113.10", 50000)) as client:
+        response = client.get("/metrics")
+
+    assert response.status_code == 403
+
+
+def test_metrics_endpoint_disabled_in_public_demo(monkeypatch):
+    from backend.app.main import app
+
+    monkeypatch.setenv("CAREERPILOT_MODE", "public_demo")
+    monkeypatch.setenv("CAREERPILOT_METRICS_ENABLED", "true")
+    monkeypatch.setenv(
+        "CAREERPILOT_DEMO_DATABASE_URL",
+        "postgresql+psycopg://demo_reader:placeholder@db.invalid:5432/demo",
+    )
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("CAREERPILOT_ADMIN_DATABASE_URL", raising=False)
+
+    # Do not start the application lifespan or connect to a database.
+    client = TestClient(app)
+    response = client.get("/metrics")
+
+    assert response.status_code == 404
+
+
+def test_metrics_endpoint_rejects_render_environment(monkeypatch):
+    from backend.app.main import app
+
+    monkeypatch.setattr(app.state, "settings", None, raising=False)
+
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("CAREERPILOT_MODE", "local")
+    monkeypatch.setenv("CAREERPILOT_METRICS_ENABLED", "true")
+
+    # Bypass lifespan; no database initialization.
+
+    client = TestClient(app)
+
+    response = client.get("/metrics")
+    assert response.status_code == 503

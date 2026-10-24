@@ -70,6 +70,7 @@ class SettingsError(RuntimeError):
 class Settings:
     mode: Mode
     on_render: bool
+    metrics_enabled: bool = False
     # Set only in public_demo. Excluded from repr so the credentials it
     # contains are never printed by logging or a failing test.
     demo_database_url: str | None = field(default=None, repr=False)
@@ -119,7 +120,16 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         )
 
     if mode is not Mode.PUBLIC_DEMO:
-        return Settings(mode=mode, on_render=on_render)
+        metrics_enabled = (
+            environ.get("CAREERPILOT_METRICS_ENABLED", "").strip().lower()
+            == "true"
+        )
+        return Settings(
+            mode=mode,
+            on_render=on_render,
+            metrics_enabled=metrics_enabled,
+        )
+
 
     # Presence alone is rejected, so an empty value cannot slip through.
     forbidden = [name for name in FORBIDDEN_PUBLIC_DEMO_ENV_VARS if name in environ]

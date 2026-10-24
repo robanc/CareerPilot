@@ -6,6 +6,9 @@ from contextlib import asynccontextmanager
 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Request
+from fastapi import HTTPException
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from backend.app.database import (
     init_db,
@@ -94,6 +97,24 @@ app.include_router(applications_router)
 app.include_router(dashboard_router)
 app.include_router(resume_router)
 app.include_router(resume_library_router)
+
+
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics(request: Request):
+    settings = load_settings()
+
+    if settings.is_public_demo or not settings.metrics_enabled:
+        raise HTTPException(status_code=404)
+
+    client_host = request.client.host if request.client else None
+
+    if client_host not in ("127.0.0.1", "::1"):
+        raise HTTPException(status_code=403)
+
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
 
 
 @app.get("/health", tags=["Health"])

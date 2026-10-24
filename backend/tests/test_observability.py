@@ -101,3 +101,61 @@ def test_rejected_request_is_logged_without_sensitive_data(caplog):
     assert records[0]["status_code"] == 403
     assert records[0]["request_id"] == response.headers["x-request-id"]
     assert secret not in json.dumps(records)
+
+
+def test_prometheus_request_counter_increments():
+    from prometheus_client import REGISTRY
+
+    test_app = FastAPI()
+    test_app.add_middleware(ObservabilityMiddleware)
+
+    @test_app.get("/ping")
+    def ping():
+        return {"status": "ok"}
+
+    labels = {"method": "GET", "status_code": "200"}
+
+    before = REGISTRY.get_sample_value(
+        "careerpilot_http_requests_total",
+        labels,
+    ) or 0
+
+    with TestClient(test_app) as client:
+        response = client.get("/ping")
+
+    after = REGISTRY.get_sample_value(
+        "careerpilot_http_requests_total",
+        labels,
+    )
+
+    assert response.status_code == 200
+    assert after == before + 1
+
+
+def test_prometheus_request_duration_histogram_records_request():
+    from prometheus_client import REGISTRY
+
+    test_app = FastAPI()
+    test_app.add_middleware(ObservabilityMiddleware)
+
+    @test_app.get("/ping")
+    def ping():
+        return {"status": "ok"}
+
+    labels = {"method": "GET", "status_code": "200"}
+
+    before = REGISTRY.get_sample_value(
+        "careerpilot_http_request_duration_seconds_count",
+        labels,
+    ) or 0
+
+    with TestClient(test_app) as client:
+        response = client.get("/ping")
+
+    after = REGISTRY.get_sample_value(
+        "careerpilot_http_request_duration_seconds_count",
+        labels,
+    )
+
+    assert response.status_code == 200
+    assert after == before + 1

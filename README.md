@@ -47,7 +47,11 @@ The public demonstration deployment is currently pending completion of database 
 
 ## Product Specification
 
-CareerPilot's requirements, MVP scope, user stories, and acceptance criteria are documented in [Product Specification](product-spec.md).
+CareerPilot is an AI-assisted job application tracking and career preparation platform designed to help job seekers organize applications, monitor their progress, prepare for interviews, and compare resumes with job descriptions.
+
+The product provides application management with search and status filtering, a dashboard showing application activity and upcoming interviews, interview scheduling and preparation notes, deterministic keyword-based resume matching, and a local Resume Library. Application records and saved resumes persist in PostgreSQL.
+
+The MVP requirements, functional specifications, user stories, expected behavior, scope, and feature-level acceptance criteria are documented in the [Product Specification](product-spec.md). The application also includes a separate read-only public demonstration mode designed for fictional data, with deployment pending security verification.
 
 Development and outstanding work are tracked through the public [GitHub Issues tracker](https://github.com/robanc/CareerPilot/issues).
 

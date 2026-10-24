@@ -13,6 +13,7 @@ from backend.app.database import (
     verify_schema,
 )
 from backend.app.limits import BodySizeLimitMiddleware, RateLimitMiddleware
+from backend.app.observability import ObservabilityMiddleware
 from backend.app.readonly import ReadOnlyMiddleware, current_settings
 from backend.app.routers.applications import router as applications_router
 from backend.app.routers.dashboard import router as dashboard_router
@@ -88,6 +89,7 @@ app.add_middleware(
 )
 
 
+app.add_middleware(ObservabilityMiddleware)
 app.include_router(applications_router)
 app.include_router(dashboard_router)
 app.include_router(resume_router)

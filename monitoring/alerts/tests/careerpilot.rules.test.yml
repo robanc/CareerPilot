@@ -1,0 +1,162 @@
+# promtool unit tests for ../careerpilot.rules.yml.
+#
+# Synthetic series only: no running Prometheus, backend, collector, or
+# database is needed. Run with:
+#   promtool test rules monitoring/alerts/tests/careerpilot.rules.test.yml
+#
+# alert_rule_test lists only firing alerts; pending alerts and alerts
+# whose condition is false both appear as an empty exp_alerts.
+
+rule_files:
+  - ../careerpilot.rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  # 5xx ratio 10% at 40 requests/minute: fires once pending for 5m.
+  - interval: 15s
+    input_series:
+      - series: 'careerpilot_http_requests_total{exported_job="careerpilot-backend", job="careerpilot-otel-collector", instance="otel-collector:8889", method="GET", status_code="200"}'
+        values: '0+9x60'
+      - series: 'careerpilot_http_requests_total{exported_job="careerpilot-backend", job="careerpilot-otel-collector", instance="otel-collector:8889", method="GET", status_code="500"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CareerPilotHigh5xxRate
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: CareerPilotHigh5xxRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "CareerPilot backend 5xx ratio above 5%"
+              description: "More than 5% of CareerPilot backend HTTP requests returned a 5xx status over the last 5 minutes (minimum 10 requests)."
+
+  # 5xx ratio 1%: below threshold, never fires.
+  - interval: 15s
+    input_series:
+      - series: 'careerpilot_http_requests_total{exported_job="careerpilot-backend", job="careerpilot-otel-collector", instance="otel-collector:8889", method="GET", status_code="200"}'
+        values: '0+99x60'
+      - series: 'careerpilot_http_requests_total{exported_job="careerpilot-backend", job="careerpilot-otel-collector", instance="otel-collector:8889", method="GET", status_code="500"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CareerPilotHigh5xxRate
+        exp_alerts: []
+
+  # Every request fails, but only ~5 requests per 5 minutes: the
+  # minimum-traffic guard keeps the alert from firing.
+  - interval: 1m
+    input_series:
+      - series: 'careerpilot_http_requests_total{exported_job="careerpilot-backend", job="careerpilot-otel-collector", instance="otel-collector:8889", method="GET", status_code="500"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: CareerPilotHigh5xxRate
+        exp_alerts: []
+
+  # 5xx from a different exported_job is ignored.
+  - interval: 15s
+    input_series:
+      - series: 'careerpilot_http_requests_total{exported_job="some-other-service", job="careerpilot-otel-collector", instance="otel-collector:8889", method="GET", status_code="500"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CareerPilotHigh5xxRate
+        exp_alerts: []
+
+  # Average latency 0.6s: pending at 9m, firing after 10m.
+  - interval: 15s
+    input_series:
+      - series: 'careerpilot_http_request_duration_seconds_count{exported_job="careerpilot-backend", job="careerpilot-otel-collector", instance="otel-collector:8889", method="GET", status_code="200"}'
+        values: '0+10x80'
+      - series: 'careerpilot_http_request_duration_seconds_sum{exported_job="careerpilot-backend", job="careerpilot-otel-collector", instance="otel-collector:8889", method="GET", status_code="200"}'
+        values: '0+6x80'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: CareerPilotHighAverageLatency
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: CareerPilotHighAverageLatency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "CareerPilot backend average latency above 0.5s"
+              description: "The average CareerPilot backend HTTP request duration has been above 0.5 seconds for 10 minutes."
+
+  # Average latency 0.4s: below threshold, never fires.
+  - interval: 15s
+    input_series:
+      - series: 'careerpilot_http_request_duration_seconds_count{exported_job="careerpilot-backend", job="careerpilot-otel-collector", instance="otel-collector:8889", method="GET", status_code="200"}'
+        values: '0+10x80'
+      - series: 'careerpilot_http_request_duration_seconds_sum{exported_job="careerpilot-backend", job="careerpilot-otel-collector", instance="otel-collector:8889", method="GET", status_code="200"}'
+        values: '0+4x80'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: CareerPilotHighAverageLatency
+        exp_alerts: []
+
+  # Backend metrics present, then marked stale at 11m (as when the
+  # collector expires them): pending at 15m, firing after 16m.
+  - interval: 1m
+    input_series:
+      - series: 'careerpilot_http_requests_total{exported_job="careerpilot-backend", job="careerpilot-otel-collector", instance="otel-collector:8889", method="GET", status_code="200"}'
+        values: '0+1x10 stale'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CareerPilotBackendTelemetryMissing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: CareerPilotBackendTelemetryMissing
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: CareerPilotBackendTelemetryMissing
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              exported_job: careerpilot-backend
+            exp_annotations:
+              summary: "CareerPilot backend telemetry missing"
+              description: "No CareerPilot backend request metrics have been received for 5 minutes. Expected when OTLP export is disabled or the backend is not running."
+
+  # OTLP export disabled: only the collector is scraped and no backend
+  # series ever arrive, so the alert fires after 5 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="careerpilot-otel-collector", instance="otel-collector:8889"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: CareerPilotBackendTelemetryMissing
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              exported_job: careerpilot-backend
+            exp_annotations:
+              summary: "CareerPilot backend telemetry missing"
+              description: "No CareerPilot backend request metrics have been received for 5 minutes. Expected when OTLP export is disabled or the backend is not running."
+      - eval_time: 6m
+        alertname: CareerPilotOtelCollectorDown
+        exp_alerts: []
+
+  # Collector scrape fails from 6m: pending at 7m, firing after 8m.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="careerpilot-otel-collector", instance="otel-collector:8889"}'
+        values: '1x5 0x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: CareerPilotOtelCollectorDown
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: CareerPilotOtelCollectorDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: careerpilot-otel-collector
+              instance: otel-collector:8889
+            exp_annotations:
+              summary: "OpenTelemetry Collector scrape target down"
+              description: "Prometheus has been unable to scrape the OpenTelemetry Collector for 2 minutes."

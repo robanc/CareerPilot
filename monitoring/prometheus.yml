@@ -1,5 +1,11 @@
 ﻿global:
   scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Local alert rules. Test files live in alerts/tests/ and are not
+# matched by this glob. No Alertmanager is configured.
+rule_files:
+  - /etc/prometheus/alerts/*.rules.yml
 
 scrape_configs:
   - job_name: "careerpilot-otel-collector"

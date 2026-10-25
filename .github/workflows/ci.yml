@@ -127,6 +127,33 @@ jobs:
       - name: Skill, subagent, and wiring checks
         run: python -m unittest discover -s .agents/tests -v
 
+  # Static validation of the local monitoring stack's Prometheus config
+  # and alert rules, using promtool from the pinned Prometheus image.
+  # Rule tests use synthetic series only: no monitoring services are
+  # started and no database is used.
+  monitoring-config:
+    name: Monitoring config and alert rule validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PROMTOOL: >-
+        docker run --rm --entrypoint /bin/promtool
+        --volume ${{ github.workspace }}/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+        --volume ${{ github.workspace }}/monitoring/alerts:/etc/prometheus/alerts:ro
+        prom/prometheus:v3.14.0
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Check Prometheus config
+        run: $PROMTOOL check config /etc/prometheus/prometheus.yml
+
+      - name: Check alert rules
+        run: $PROMTOOL check rules /etc/prometheus/alerts/careerpilot.rules.yml
+
+      - name: Test alert rules with synthetic series
+        run: $PROMTOOL test rules /etc/prometheus/alerts/tests/careerpilot.rules.test.yml
+
   docker-build:
     name: Docker image build verification
     runs-on: ubuntu-latest

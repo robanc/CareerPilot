@@ -144,6 +144,103 @@ This allows a request to be investigated across logs and traces.
 The correlation was verified using synthetic test requests.
 No real resumes or personal information were required.
 
+## Alerting
+
+Prometheus evaluates local alert rules from
+`monitoring/alerts/careerpilot.rules.yml`, mounted read-only
+into the Prometheus container at `/etc/prometheus/alerts`.
+
+Alerting is local-only:
+
+- Firing and pending alerts are visible at
+  http://127.0.0.1:9090/alerts and through the Grafana
+  Prometheus data source (`ALERTS` series).
+- No Alertmanager is configured.
+- No notifications (email, chat, paging) are sent.
+- Alerting is not enabled in the Render deployment.
+
+### Alert Rules
+
+| Alert | Condition | For | Severity |
+|---|---|---|---|
+| `CareerPilotHigh5xxRate` | 5xx responses above 5% of requests over 5 minutes, with at least 10 requests in that window | 5m | warning |
+| `CareerPilotHighAverageLatency` | Average request duration above 0.5 seconds over 5 minutes | 10m | warning |
+| `CareerPilotBackendTelemetryMissing` | No `careerpilot_http_requests_total{exported_job="careerpilot-backend"}` series | 5m | info |
+| `CareerPilotOtelCollectorDown` | `up{job="careerpilot-otel-collector"} == 0` | 2m | warning |
+
+The rules use the metrics exported over OTLP and re-exposed
+by the OpenTelemetry Collector:
+
+- `careerpilot_http_requests_total`
+- `careerpilot_http_request_duration_seconds_sum`
+- `careerpilot_http_request_duration_seconds_count`
+
+The backend service name appears as the `exported_job` label.
+Request metrics carry `method` and `status_code` labels;
+there is no per-route label.
+
+Latency is alerted on the average (sum divided by count).
+The OTLP histogram uses the OpenTelemetry SDK's default
+bucket boundaries, so percentile alerts are not configured.
+
+### Expected Telemetry-Missing Alerts
+
+`CareerPilotBackendTelemetryMissing` is expected to fire
+in normal local use when:
+
+- `CAREERPILOT_OTLP_ENABLED` is not `true`.
+- The backend is not running.
+- The backend has started but has not yet served a request.
+
+The Collector drops backend series about 5 minutes after
+the last update, so the alert fires roughly 10 minutes
+after the backend stops exporting.
+
+If the Collector itself is down, both
+`CareerPilotOtelCollectorDown` and
+`CareerPilotBackendTelemetryMissing` fire.
+
+### Validating Alert Rules
+
+The rules have unit tests in
+`monitoring/alerts/tests/careerpilot.rules.test.yml`.
+They use synthetic series only and need no running
+monitoring services, backend, or database.
+
+The test file is outside the `*.rules.yml` glob, so
+Prometheus does not load it as a rule file.
+
+The CI `monitoring-config` job runs `promtool` from the
+pinned Prometheus image. To run the same checks locally:
+
+```powershell
+docker run --rm --entrypoint /bin/promtool `
+  --volume "${PWD}/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro" `
+  --volume "${PWD}/monitoring/alerts:/etc/prometheus/alerts:ro" `
+  prom/prometheus:v3.14.0 check config /etc/prometheus/prometheus.yml
+
+docker run --rm --entrypoint /bin/promtool `
+  --volume "${PWD}/monitoring/alerts:/etc/prometheus/alerts:ro" `
+  prom/prometheus:v3.14.0 test rules /etc/prometheus/alerts/tests/careerpilot.rules.test.yml
+```
+
+These commands start a short-lived `promtool` container
+only. They do not affect the running monitoring stack.
+
+The `alerts` volume mount is new, so an existing Prometheus
+container must be recreated once to pick it up. This keeps
+the `prometheus_data` volume:
+
+```powershell
+docker compose -f monitoring/docker-compose.yml up -d --pull never prometheus
+```
+
+After that, Prometheus loads rule edits on restart:
+
+```powershell
+docker compose -f monitoring/docker-compose.yml restart prometheus
+```
+
 ## Privacy and Security
 
 - Telemetry export is disabled by default.
@@ -154,6 +251,7 @@ No real resumes or personal information were required.
 - Monitoring is not enabled in the Render deployment.
 - Loki authentication is disabled for this local-only setup.
 - Loki log retention is not explicitly configured.
+- Alert rules are evaluated locally; no alert notifications are configured.
 
 Do not expose this monitoring stack publicly without
 appropriate authentication, network restrictions, and

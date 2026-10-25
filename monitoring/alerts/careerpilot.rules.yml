@@ -1,0 +1,75 @@
+# CareerPilot local alerting rules.
+#
+# Local development only. Prometheus evaluates these rules and shows
+# firing alerts at http://127.0.0.1:9090/alerts and in Grafana.
+# No Alertmanager or notification integration is configured, so no
+# alert is sent anywhere.
+#
+# The metrics come from the backend's OpenTelemetry (OTLP) export,
+# re-exposed by the OpenTelemetry Collector. The backend's
+# service.name becomes the "exported_job" label; "job" is the
+# collector scrape job.
+#
+# Unit tests with synthetic series: tests/careerpilot.rules.test.yml
+
+groups:
+  - name: careerpilot-backend
+    rules:
+      # More than 5% of requests returned 5xx over 5 minutes, with at
+      # least 10 requests in that window so a single failure in an
+      # idle local session does not fire the alert.
+      - alert: CareerPilotHigh5xxRate
+        expr: |
+          (
+            sum(rate(careerpilot_http_requests_total{exported_job="careerpilot-backend", status_code=~"5.."}[5m]))
+            /
+            sum(rate(careerpilot_http_requests_total{exported_job="careerpilot-backend"}[5m]))
+          ) > 0.05
+          and
+          sum(increase(careerpilot_http_requests_total{exported_job="careerpilot-backend"}[5m])) >= 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CareerPilot backend 5xx ratio above 5%"
+          description: "More than 5% of CareerPilot backend HTTP requests returned a 5xx status over the last 5 minutes (minimum 10 requests)."
+
+      # Average request duration (sum / count) above 0.5 seconds. The
+      # OTLP histogram uses the SDK's default bucket boundaries, so a
+      # quantile-based alert is not used.
+      - alert: CareerPilotHighAverageLatency
+        expr: |
+          sum(rate(careerpilot_http_request_duration_seconds_sum{exported_job="careerpilot-backend"}[5m]))
+          /
+          sum(rate(careerpilot_http_request_duration_seconds_count{exported_job="careerpilot-backend"}[5m]))
+          > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CareerPilot backend average latency above 0.5s"
+          description: "The average CareerPilot backend HTTP request duration has been above 0.5 seconds for 10 minutes."
+
+      # No backend request metrics in Prometheus. Expected locally when
+      # CAREERPILOT_OTLP_ENABLED is not "true", when the backend is not
+      # running, or when it has not served a request since starting.
+      # The collector drops series about 5 minutes after the last
+      # update, so this fires roughly 10 minutes after export stops.
+      - alert: CareerPilotBackendTelemetryMissing
+        expr: absent(careerpilot_http_requests_total{exported_job="careerpilot-backend"})
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "CareerPilot backend telemetry missing"
+          description: "No CareerPilot backend request metrics have been received for 5 minutes. Expected when OTLP export is disabled or the backend is not running."
+
+      # Prometheus cannot scrape the OpenTelemetry Collector.
+      - alert: CareerPilotOtelCollectorDown
+        expr: up{job="careerpilot-otel-collector"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenTelemetry Collector scrape target down"
+          description: "Prometheus has been unable to scrape the OpenTelemetry Collector for 2 minutes."

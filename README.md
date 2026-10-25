@@ -527,7 +527,7 @@ The monitoring stack runs separately from the application and PostgreSQL databas
 | Centralized visualization | Grafana provides access to Prometheus metrics, Loki logs, and Tempo traces |
 | Trace correlation | Request and trace identifiers support investigation across telemetry sources |
 | Automated validation | 10 observability tests passed locally |
-| CI verification | GitHub Actions CI run #21 passed all four jobs |
+| CI verification | GitHub Actions CI run #25 passed all five jobs, including monitoring configuration and alert rule validation |
 
 ### Local Monitoring Setup
 
@@ -555,7 +555,7 @@ For detailed setup, telemetry queries, validation, and troubleshooting, see [Mon
 - The monitoring stack has been validated locally but has not been deployed to production.
 - End-to-end tracing across frontend, backend, and database operations has not been verified.
 - Business-level metrics for all job application workflows have not been verified.
-- Automated alerting and AI-assisted incident response are separate capstone requirements and are not yet established by this implementation.
+- Local Prometheus alert rules and a manual incident response runbook are in place; see [Alerting on User Impact](#alerting-on-user-impact). No alert notifications are configured, and AI-assisted incident response is not implemented (see [On-Call Agent](#on-call-agent)).
 
 ### Privacy and Security
 
@@ -573,7 +573,7 @@ Observability instrumentation avoids recording resume contents, job descriptions
 
 ## Alerting on User Impact
 
-CareerPilot provides health-check endpoints and user-facing error messages, but automated operational alerting has not yet been configured or verified.
+CareerPilot provides health-check endpoints, user-facing error messages, and four local Prometheus alert rules for backend errors, latency, and telemetry availability. Alerts are evaluated by the local monitoring stack only; no notifications are sent and production alerting is not configured.
 
 ### Existing Capabilities
 
@@ -582,13 +582,46 @@ CareerPilot provides health-check endpoints and user-facing error messages, but 
 - **Database readiness checks:** Docker Compose uses PostgreSQL health checks to determine when the database is ready.
 - **User-facing errors:** The React frontend displays error messages when certain application operations fail.
 
-These mechanisms support application health checks and error handling but do not constitute an automated operational alerting system.
+These mechanisms support application health checks and error handling but do not by themselves provide alerting. Alerting comes from the separately configured local Prometheus rules described below.
+
+### Local Prometheus Alerts
+
+The local Prometheus instance evaluates these rules against the backend's OpenTelemetry metrics, exported through the OpenTelemetry Collector:
+
+| Alert | Condition | For | Severity |
+|---|---|---|---|
+| `CareerPilotHigh5xxRate` | 5xx responses above 5% of requests over 5 minutes, with at least 10 requests | 5m | warning |
+| `CareerPilotHighAverageLatency` | Average request duration above 0.5 seconds | 10m | warning |
+| `CareerPilotBackendTelemetryMissing` | No backend request metrics in Prometheus | 5m | info |
+| `CareerPilotOtelCollectorDown` | Prometheus cannot scrape the OpenTelemetry Collector | 2m | warning |
+
+Firing alerts are visible at http://127.0.0.1:9090/alerts and through Grafana. `CareerPilotBackendTelemetryMissing` is expected to fire locally when OpenTelemetry export is disabled or the backend is not running.
+
+### Alert Validation
+
+- **Synthetic rule tests:** `promtool test rules` runs 9 test cases on synthetic time series, with no running services or database. The tests check that each alert fires after its `for` duration and stays inactive below its threshold.
+- **Local validation:** `promtool check config`, `check rules`, and `test rules` passed locally.
+- **GitHub Actions:** the `monitoring-config` CI job runs the same three `promtool` checks. CI runs #23, #24, and #25 each passed all five jobs, including `monitoring-config`.
+
+### Incident Response
+
+[`monitoring/INCIDENT_RESPONSE.md`](monitoring/INCIDENT_RESPONSE.md) is a manual runbook for the four alerts. It covers:
+
+- triage;
+- investigation in Prometheus, Grafana, Loki, and Tempo;
+- expected versus unexpected missing telemetry;
+- recovery verification, escalation, and an incident report template.
+
+Restarts and remediation require developer approval.
 
 ### Current Limitations
 
-CareerPilot does not yet have a verified alert that notifies an operator when the application becomes unavailable or experiences user-impacting failures.
+- **No Alertmanager or notifications:** alerts must be checked manually, and no operator is notified.
+- **No production alerting:** the alerts cover the local monitoring stack only, not the Render deployment.
+- **Not verified live:** alert firing has been verified with synthetic `promtool` tests only, not against a running stack.
+- **No external uptime monitoring.**
 
-Potential future improvements include external uptime monitoring, API error-rate alerts, and notifications to a designated operator.
+Potential future improvements include external uptime monitoring, notifications to a designated operator, and production alerting.
 
 ### Implementation References
 
@@ -596,11 +629,15 @@ Potential future improvements include external uptime monitoring, API error-rate
 - [Render Configuration](render.yaml)
 - [Docker Compose Configuration](docker-compose.yml)
 - [Deployment Smoke Test](ops/smoke-test-render.sh)
+- [Monitoring Documentation](monitoring/README.md)
+- [Prometheus Alert Rules](monitoring/alerts/careerpilot.rules.yml)
+- [Alert Rule Tests](monitoring/alerts/tests/careerpilot.rules.test.yml)
+- [Incident Response Runbook](monitoring/INCIDENT_RESPONSE.md)
 
 
 ## On-Call Agent
 
-CareerPilot includes development-focused agent extensions, but an automated on-call incident-response agent has not yet been implemented.
+CareerPilot includes development-focused agent extensions and a manual [incident response runbook](monitoring/INCIDENT_RESPONSE.md) for its local alerts, but an automated on-call incident-response agent has not yet been implemented.
 
 ### Existing Agent Capabilities
 
@@ -613,12 +650,16 @@ The project includes:
 
 These components support safer development and release preparation. They are not connected to an operational alerting system and do not automatically remediate production incidents.
 
+### Manual Incident Response
+
+The local Prometheus alerts are handled by a developer, or an AI agent under developer supervision, following [`monitoring/INCIDENT_RESPONSE.md`](monitoring/INCIDENT_RESPONSE.md). The runbook limits investigation to read-only steps and requires developer approval for restarts and remediation. No agent is triggered by an alert.
+
 ### Current Limitations
 
 CareerPilot does not currently provide:
 
 - An operational alert that activates an on-call agent.
-- Automated incident investigation based on production telemetry.
+- Automated incident investigation based on local or production telemetry.
 - An agent that diagnoses and fixes user-impacting failures.
 - Verified automated remediation with incident audit records.
 
@@ -630,6 +671,7 @@ Any future on-call agent should operate within explicit permission boundaries, m
 - [Agent Permissions](docs/permissions.md)
 - [Security Reviewer](.agents/agents/security-reviewer.md)
 - [Release Auditor](custom-agent/release_auditor.py)
+- [Incident Response Runbook](monitoring/INCIDENT_RESPONSE.md)
 - [AI Development Log](docs/ai-development-log.md)
 
 

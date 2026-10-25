@@ -194,6 +194,7 @@ CareerPilot uses automated backend, frontend, and database integration tests to 
 | Test Category | Framework / Tool | Purpose |
 |---|---|---|
 | Backend unit tests | Pytest | Validate application logic, input validation, and API behavior |
+| Observability tests | Pytest | Verify OpenTelemetry instrumentation, HTTP metrics, structured logging, and trace correlation |
 | Database integration tests | Pytest + PostgreSQL 16 | Verify database interactions, persistence, and security behavior |
 | Frontend tests | Vitest + React Testing Library | Verify frontend components and application behavior |
 | Code quality | ESLint | Check frontend code quality |
@@ -238,6 +239,8 @@ The `npm test` command runs the frontend test suite using Vitest.
 
 CareerPilot's GitHub Actions CI pipeline runs automated verification for backend tests, frontend linting and tests, agent extensions, and Docker Compose configuration.
 
+GitHub Actions CI run #21 passed all four jobs on commit `3ea8ed6`, including backend tests, frontend checks, agent extension tests, and Docker image build verification.
+
 See [.github/workflows/ci.yml](.github/workflows/ci.yml) for the CI workflow definition.
 
 ### Testing Safety
@@ -280,7 +283,12 @@ See [.github/workflows/ci.yml](.github/workflows/ci.yml) for the CI workflow def
 
     cd frontend && npm ci && npm run lint && npm test && npm run build
 
-**Agent extensions** (standard library only; no network, database, or dependencies):
+**Agent extensions** (Python 3.12; install backend dependencies from
+`backend/requirements.txt` before running the tests):
+
+The agent extension tests cover the guardrail hook, MCP server, custom agent,
+and reusable agent components. The MCP server imports backend modules that
+require OpenTelemetry dependencies.
 
     python -m unittest discover -s agent-hooks/tests
     python -m unittest discover -s mcp-server/tests
@@ -461,7 +469,7 @@ Deployment credentials are designed to be stored as protected GitHub environment
 
 ### Current CI/CD Status
 
-- **Continuous integration:** Configured for pull requests and pushes to `main`.
+- **Continuous integration:** Operational and verified. GitHub Actions CI run #21 passed all four jobs on commit `3ea8ed6`, including backend tests, frontend checks, agent extension tests, and Docker image build verification.
 - **Manual deployment workflow:** Implemented, but not yet verified through a successful public release.
 - **Automatic development deployment:** Not implemented.
 - **Production deployment:** Pending completion of Render database provisioning and security verification.
@@ -502,36 +510,63 @@ start it by hand, and it runs four stages in order:
 
 ## Observability
 
-CareerPilot currently provides basic application logging and operational health endpoints. A complete observability stack with correlated metrics, distributed tracing, and centralized dashboards has not yet been implemented.
+CareerPilot includes a locally validated observability stack using OpenTelemetry, Prometheus, Grafana, Loki, and Tempo. The implementation provides HTTP request metrics, structured application logs, backend tracing, and correlation identifiers for investigating application performance and errors.
 
-### Existing Capabilities
+The monitoring stack runs separately from the application and PostgreSQL database using `monitoring/docker-compose.yml`. Production observability deployment has not yet been performed.
+
+### Implemented Capabilities
 
 | Capability | Implementation |
 |---|---|
-| Application logging | Python's standard `logging` module is used for backend startup warnings |
-| Health check | `GET /health` returns `{"status": "ok"}` when the application is serving requests |
-| Version identification | `GET /version` reports the deployed commit when `RENDER_GIT_COMMIT` is configured |
-| Deployment verification | The Render smoke-test script checks deployment readiness and commit identity |
+| Application health | `GET /health` provides an application health check |
+| Version identification | `GET /version` identifies the deployed commit when configured |
+| HTTP metrics | Prometheus-compatible request counts and duration metrics |
+| OpenTelemetry | Backend instrumentation and OTLP telemetry export |
+| Distributed tracing | Tempo stores backend HTTP and resume-matching spans |
+| Structured logging | JSON HTTP logs include request and trace identifiers without request-body contents |
+| Centralized visualization | Grafana provides access to Prometheus metrics, Loki logs, and Tempo traces |
+| Trace correlation | Request and trace identifiers support investigation across telemetry sources |
+| Automated validation | 10 observability tests passed locally |
+| CI verification | GitHub Actions CI run #21 passed all four jobs |
+
+### Local Monitoring Setup
+
+Start the independent monitoring stack:
+
+```powershell
+docker compose -p careerpilot-monitoring -f monitoring/docker-compose.yml up -d
+```
+
+Local monitoring interfaces:
+
+| Service | Address |
+|---|---|
+| Grafana | http://127.0.0.1:3000 |
+| Prometheus | http://127.0.0.1:9090 |
+| Tempo | http://127.0.0.1:3200 |
+| Loki | http://127.0.0.1:3100 |
+
+OpenTelemetry export is enabled only when `CAREERPILOT_OTLP_ENABLED=true` is configured for the backend.
+
+For detailed setup, telemetry queries, validation, and troubleshooting, see [Monitoring Documentation](monitoring/README.md).
 
 ### Current Limitations
 
-The following capabilities have not yet been implemented or verified:
-
-- Structured JSON logging with shared request or trace identifiers.
-- User journey metrics for application creation, status updates, and resume matching.
-- Distributed tracing across frontend, backend, and database operations.
-- Centralized collection, storage, and visualization of correlated telemetry.
-- An observability dashboard for investigating application performance and errors.
-
-The backend includes an OpenTelemetry API dependency, but the presence of this dependency does not establish an operational tracing system.
+- The monitoring stack has been validated locally but has not been deployed to production.
+- End-to-end tracing across frontend, backend, and database operations has not been verified.
+- Business-level metrics for all job application workflows have not been verified.
+- Automated alerting and AI-assisted incident response are separate capstone requirements and are not yet established by this implementation.
 
 ### Privacy and Security
 
-Any future observability implementation should avoid recording resume contents, job descriptions, credentials, or other sensitive information in logs, metrics, or traces.
+Observability instrumentation avoids recording resume contents, job descriptions, credentials, and request bodies in telemetry. Monitoring services are bound to local interfaces for development use.
 
 ### Implementation References
 
-- [FastAPI Application](backend/app/main.py)
+- [Monitoring Documentation](monitoring/README.md)
+- [Monitoring Docker Compose](monitoring/docker-compose.yml)
+- [OpenTelemetry Instrumentation](backend/app/observability.py)
+- [Resume Matching Service](backend/app/services/resume_matcher.py)
 - [Backend Dependencies](backend/requirements.txt)
 - [Render Smoke Test](ops/smoke-test-render.sh)
 
@@ -706,6 +741,24 @@ python -m unittest discover -s .agents/tests
 
 These tests verify the guardrail hook, MCP server, custom agent, and reusable agent components.
 
+
+
+### 8. Start the Local Monitoring Stack
+
+CareerPilot includes an independent monitoring stack for inspecting application metrics, logs, and traces.
+
+From the repository root, run:
+
+```powershell
+docker compose -p careerpilot-monitoring -f monitoring/docker-compose.yml up -d
+```
+
+Open Grafana at http://127.0.0.1:3000 to explore the configured Prometheus, Loki, and Tempo data sources.
+
+Backend OpenTelemetry export is enabled only when `CAREERPILOT_OTLP_ENABLED=true` is configured. Starting the monitoring stack alone does not enable backend telemetry export.
+
+For detailed setup, verification commands, and example queries, see [Monitoring Documentation](monitoring/README.md).
+
 ### Known Limitations
 
 - CareerPilot does not provide user authentication. Use fictional data only.
@@ -748,6 +801,15 @@ These tests verify the guardrail hook, MCP server, custom agent, and reusable ag
 
     React/Vite frontend  ->  FastAPI backend  ->  PostgreSQL 16
     (frontend/)              (backend/app/)       (SQLAlchemy, psycopg 3)
+
+**Observability architecture:** The FastAPI backend emits HTTP metrics,
+structured logs, and OpenTelemetry traces. The local monitoring stack
+collects telemetry through the OpenTelemetry Collector and makes metrics
+available in Prometheus, logs in Loki, and traces in Tempo. Grafana
+provides a unified interface for investigating these signals.
+
+See [Monitoring Documentation](monitoring/README.md) for setup and
+verification instructions.
 
 - **Frontend:** all API calls go through one module, `frontend/src/services/api.js`. In Docker, nginx
   serves the build and proxies `/api/` to the backend.

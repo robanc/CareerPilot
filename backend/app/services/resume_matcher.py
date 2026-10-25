@@ -1,5 +1,6 @@
 
 import re
+from backend.app.observability import tracer
 
 
 SKILLS = [
@@ -51,36 +52,37 @@ def match_resume(
 ) -> dict:
     """Compare resume skills against job requirements."""
 
-    resume_skills = extract_skills(resume_text)
-    required_skills = extract_skills(job_description)
+    with tracer.start_as_current_span("resume.match"):
+        resume_skills = extract_skills(resume_text)
+        required_skills = extract_skills(job_description)
 
-    matched = sorted(resume_skills & required_skills)
-    missing = sorted(required_skills - resume_skills)
+        matched = sorted(resume_skills & required_skills)
+        missing = sorted(required_skills - resume_skills)
 
-    if required_skills:
-        score = round(
-            len(matched) / len(required_skills) * 100
-        )
-    else:
-        score = 0
+        if required_skills:
+            score = round(
+                len(matched) / len(required_skills) * 100
+            )
+        else:
+            score = 0
 
-    suggestions = [
-        f"Highlight relevant experience with {skill} if you have it."
-        for skill in missing
-    ]
+        suggestions = [
+            f"Highlight relevant experience with {skill} if you have it."
+            for skill in missing
+        ]
 
-    if not required_skills:
-        suggestions.append(
-            "No recognized technical skills were found in the job description."
-        )
-    elif not missing:
-        suggestions.append(
-            "Your resume mentions all recognized skills in the job description."
-        )
+        if not required_skills:
+            suggestions.append(
+                "No recognized technical skills were found in the job description."
+            )
+        elif not missing:
+            suggestions.append(
+                "Your resume mentions all recognized skills in the job description."
+            )
 
-    return {
-        "score": score,
-        "matched_keywords": matched,
-        "missing_keywords": missing,
-        "suggestions": suggestions,
-    }
+        return {
+            "score": score,
+            "matched_keywords": matched,
+            "missing_keywords": missing,
+            "suggestions": suggestions,
+        }

@@ -1196,3 +1196,154 @@ Close the two blockers left by Entry 011:
 - The extension tests and the new CI job have not run in GitHub Actions yet.
 - Render: the capability check, provisioning, seeding, first release, and smoke run (see `docs/deployment-render.md`).
 - None in the frontend: the production build also succeeded after the module move.
+
+## Entry 013 — Observability, Alerting, and Incident Response
+
+**Date:** October 25, 2026
+**AI Coding Agent:** Claude Code (Claude Opus 5.5)
+**Development Method:** Human-supervised, agent-assisted implementation
+**Status:** Committed on `main` as `b8381f8` (alert rules and CI validation) and `cab1f49` (incident response runbook). The three `promtool` checks passed locally. The developer reports that GitHub Actions CI runs #22–#24 succeeded, with all five jobs passing in #23 and #24. Render deployment remains **on hold**.
+
+### Objective
+
+- Record the local OpenTelemetry observability stack already in the repository.
+- Add local Prometheus alerting for backend 5xx rate, average latency, missing backend telemetry, and OpenTelemetry Collector availability.
+- Validate the rules with synthetic `promtool` tests, locally and in CI.
+- Document incident response for the four alerts.
+
+### Context: Existing Observability Stack
+
+The stack predates the alerting work. This summary comes from the Git history and the current files. The prompts used for these earlier commits are not part of this entry's session.
+
+- **Commits:**
+  - `c095232`: structured HTTP request logging and correlation IDs;
+  - `d60b715`: Prometheus HTTP request metrics;
+  - `92fee91`: protected `/metrics` endpoint;
+  - `56788a3`: OpenTelemetry stack and documentation;
+  - `3ea8ed6`: CI dependency fix for the agent-extensions job;
+  - `42b3838`: README update.
+- **Backend (`backend/app/observability.py`):**
+  - OTLP export of metrics, traces, and logs to `127.0.0.1:4318`, with service name `careerpilot-backend`;
+  - opt-in through `CAREERPILOT_OTLP_ENABLED=true`;
+  - request logs record method, status code, duration, request ID, and trace ID, but no request bodies or resume text.
+- **Monitoring stack (`monitoring/docker-compose.yml`):** a separate Compose project, `careerpilot-monitoring`, running Prometheus, the OpenTelemetry Collector, Tempo, Loki, and Grafana, with all ports bound to `127.0.0.1`.
+- **Prometheus metrics:** Prometheus scrapes only the Collector (`otel-collector:8889`). The OTLP metrics appear as:
+  - `careerpilot_http_requests_total`;
+  - `careerpilot_http_request_duration_seconds_{bucket,sum,count}`.
+
+  Their labels are `method`, `status_code`, and `exported_job="careerpilot-backend"`. There is no route label.
+- **Existing tests:** `backend/tests/test_observability.py` contains 10 tests. `monitoring/README.md` records that all 10 passed locally. They were not rerun in this session.
+
+### Tasks and Prompts (summarized)
+
+1. **Read-only analysis** of the monitoring configuration and metrics, ending in a proposal. The agent confirmed metric names and labels from the files and proposed rules, tests, configuration, CI, and documentation. It also flagged that the OTLP histogram has no explicit buckets, so percentile latency is unreliable. The work then stopped for approval.
+2. **Approved implementation**, with the developer's specification:
+   - the four alerts, with their exact thresholds;
+   - tests kept outside the rule glob;
+   - no histogram fix, p95 alert, Alertmanager, notifications, or smoke scripts.
+3. **Approved validation:** only the three proposed `promtool` commands.
+4. **Read-only runbook planning**, then creation of exactly one file, `monitoring/INCIDENT_RESPONSE.md`.
+5. **A targeted runbook revision** for accuracy (see Manual Review and Corrections).
+6. **This log entry.**
+
+### Context Supplied
+
+- `product-spec.md`, `openapi.yaml`, `AGENTS.md`, and `CLAUDE.md`.
+- `monitoring/prometheus.yml`, `docker-compose.yml`, `otel-collector.yml`, and `README.md`.
+- `backend/app/observability.py`, `backend/app/main.py`, and `backend/tests/test_observability.py`.
+- `.github/workflows/ci.yml` and `backend/requirements.txt`.
+
+### Files Changed
+
+- **Alerting (`b8381f8`):**
+  - `monitoring/alerts/careerpilot.rules.yml` (new). It holds four rules:
+    - `CareerPilotHigh5xxRate`: 5xx ratio above 5%, with at least 10 requests in 5 minutes, for 5 minutes (warning);
+    - `CareerPilotHighAverageLatency`: average latency above 0.5 seconds, for 10 minutes (warning);
+    - `CareerPilotBackendTelemetryMissing`: `absent()` of the backend request series, for 5 minutes (info);
+    - `CareerPilotOtelCollectorDown`: `up == 0` on the Collector, for 2 minutes (warning).
+  - `monitoring/alerts/tests/careerpilot.rules.test.yml` (new): 9 synthetic test cases with 15 alert checks.
+  - `monitoring/prometheus.yml`: added `evaluation_interval: 15s` and `rule_files: /etc/prometheus/alerts/*.rules.yml`.
+  - `monitoring/docker-compose.yml`: added a read-only `./alerts` mount for Prometheus.
+  - `.github/workflows/ci.yml`: added a `monitoring-config` job that runs `promtool check config`, `check rules`, and `test rules` from `prom/prometheus:v3.14.0`.
+  - `monitoring/README.md`: new "Alerting" section and one privacy line.
+- **Runbook (`cab1f49`):** `monitoring/INCIDENT_RESPONSE.md` (new). It covers:
+  - scope and safety rules;
+  - severities, triage, and the four alert playbooks;
+  - expected versus unexpected missing telemetry;
+  - investigation in Prometheus, Grafana, Loki, and Tempo;
+  - conditional recovery verification and escalation;
+  - an incident report template and known limitations.
+- **Documentation:** this entry.
+
+### Manual Review and Corrections
+
+- **Agent self-corrections:**
+  - A plain `restart` does not add a new volume mount. The README now says to recreate Prometheus once with `up -d --pull never prometheus`.
+  - The first static-check run failed only because Windows returned a `\` path separator. The comparison was normalized and the check rerun.
+  - The editor flagged unchanged lines in `ci.yml`. PyYAML parsed the workflow with all five jobs, so the agent judged the diagnostics stale.
+  - The agent added `--pull never` to the three approved `promtool` commands, so a missing image could not be downloaded. The image was already present locally.
+  - In the runbook revision, the agent toned down a claim about SDK export retries that it had not verified.
+- **Developer-requested runbook corrections:**
+  - PromQL examples became single, directly pasteable queries, with explanations moved outside the code blocks.
+  - Recovery verification now depends on the incident type and whether OTLP is enabled. Read-only checks are separated from synthetic requests, which require approval.
+  - Collector-outage wording is qualified: telemetry may be delayed or lost depending on outage duration, and `CareerPilotBackendTelemetryMissing` may fire only after its own delay.
+
+  Alongside these, the template's verification checklist was aligned with the conditional verification.
+- **Unverified assumptions, marked in the runbook:**
+  - the LogQL `| json` queries;
+  - whether a backend running in Docker can reach `127.0.0.1:4318`;
+  - all alert firing and clear-down timings, which are derived from the rules, not measured.
+- **Open documentation items, not changed:**
+  - `README.md` still says automated alerting is "not yet established";
+  - `AGENTS.md` places runbooks under `ops/`, but the runbook is in `monitoring/`.
+
+### Tests Executed
+
+**Local (run by the agent):**
+
+- **Static consistency check** (inline `python -I` with PyYAML). Passed after the path fix:
+  - all six affected YAML files parse;
+  - the rule glob matches only the rules file;
+  - the four alert names and `for` durations are as specified;
+  - the metric names match `observability.py`;
+  - the expected test annotations and severities match the rules.
+- **`git diff --check`:** clean.
+- **`promtool`**, run in short-lived `prom/prometheus:v3.14.0` containers with `--pull never`:
+  - `check config /etc/prometheus/prometheus.yml`: SUCCESS, 1 rule file and 4 rules found;
+  - `check rules /etc/prometheus/alerts/careerpilot.rules.yml`: SUCCESS, 4 rules found;
+  - `test rules /etc/prometheus/alerts/tests/careerpilot.rules.test.yml`: SUCCESS.
+- **Not run in this session:** backend pytest, frontend lint, tests, and build. No application code changed.
+
+**GitHub Actions (reported by the developer):**
+
+- CI runs #22, #23, and #24 succeeded.
+- All five jobs passed in #23 and #24: `backend-tests`, `frontend`, `agent-extensions`, `monitoring-config`, and `docker-build`.
+- The agent could not verify these runs independently, because the `gh` CLI is not installed locally.
+
+### Human Oversight
+
+- **Approved by the developer:**
+  - the implementation scope;
+  - the three `promtool` commands;
+  - the runbook outline and its single-file creation;
+  - the runbook corrections.
+- **Committed by the developer:** `b8381f8` and `cab1f49`. The agent did not stage, commit, or push.
+- **What did not happen:**
+  - no access to or changes in the development PostgreSQL database, the test database, or the protected backups (`careerpilot_backup.dump`, `backend/tests/sql/stage-b-original-backup/`, `backend/tests/stage-b-staging/`);
+  - no changes to running Docker services or volumes;
+  - no deployment, and no Render changes;
+  - no `.env` file or secret was read.
+
+### Remaining Items
+
+- **Render deployment** remains on hold. The monitoring stack and alerts are local-only and do not cover Render.
+- **No notifications:** no Alertmanager or notification integration is configured, so alerts must be checked manually.
+- **Not yet implemented:**
+  - the OTLP histogram bucket fix and p95 latency alert;
+  - live verification of the alert labels against a running Prometheus;
+  - the LogQL queries in the runbook.
+- **Documentation follow-ups:** the stale alerting statement in `README.md`, and the location of the runbook relative to `ops/`.
+
+### Outcome
+
+CareerPilot now has local Prometheus alerting on its OpenTelemetry metrics: four rules, validated by `promtool` locally and, as reported by the developer, by the `monitoring-config` CI job. A local incident response runbook covers all four alerts and separates expected missing telemetry from real incidents. Monitoring remains local-only, and the Render deployment remains on hold.

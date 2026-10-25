@@ -637,7 +637,7 @@ Potential future improvements include external uptime monitoring, notifications 
 
 ## On-Call Agent
 
-CareerPilot includes development-focused agent extensions and a manual [incident response runbook](monitoring/INCIDENT_RESPONSE.md) for its local alerts, but an automated on-call incident-response agent has not yet been implemented.
+CareerPilot includes development-focused agent extensions, a manual [incident response runbook](monitoring/INCIDENT_RESPONSE.md) for its local alerts, and a deterministic, read-only On-Call Investigator that turns synthetic alert evidence into an incident report. An automated on-call agent that is triggered by alerts, reads live telemetry, or remediates incidents has not been implemented.
 
 ### Existing Agent Capabilities
 
@@ -647,6 +647,7 @@ The project includes:
 - **Release Auditor:** A deterministic custom agent for evaluating release readiness.
 - **Guardrail Hook:** Prevents certain unsafe agent operations.
 - **Read-Only MCP Server:** Provides narrowly scoped tools for inspecting project information.
+- **On-Call Investigator:** A deterministic custom agent that produces runbook-style incident reports from synthetic alert evidence (see below).
 
 These components support safer development and release preparation. They are not connected to an operational alerting system and do not automatically remediate production incidents.
 
@@ -654,11 +655,61 @@ These components support safer development and release preparation. They are not
 
 The local Prometheus alerts are handled by a developer, or an AI agent under developer supervision, following [`monitoring/INCIDENT_RESPONSE.md`](monitoring/INCIDENT_RESPONSE.md). The runbook limits investigation to read-only steps and requires developer approval for restarts and remediation. No agent is triggered by an alert.
 
+### On-Call Investigator
+
+[`custom-agent/oncall_investigator.py`](custom-agent/oncall_investigator.py) is a deterministic agent with no LLM. A developer runs it by hand against one local JSON file of synthetic alert evidence. It validates the file and produces an incident report that follows the runbook.
+
+- **Input:** a strict JSON schema (`schema_version: 1`) that must declare `"synthetic": true`. It lists alerts with their state and UTC timestamps, plus optional evidence: OTLP state, backend and Collector status, observations, actions, root cause, and verification checks.
+- **Supported alerts:** exactly the four Prometheus alerts and their documented severities:
+  - `CareerPilotOtelCollectorDown` (warning);
+  - `CareerPilotHigh5xxRate` (warning);
+  - `CareerPilotHighAverageLatency` (warning);
+  - `CareerPilotBackendTelemetryMissing` (info).
+- **Rejected input:**
+  - unknown alerts, invalid states, malformed timestamps, and unknown fields;
+  - multi-line or over-long text, and text that looks like a secret.
+- **Collector first:** when several alerts are present, a Collector-down alert is investigated first (runbook section 5.4).
+- **Missing telemetry:** classified as `needs-investigation` unless the evidence explicitly shows an expected cause, such as OTLP export disabled or the backend not running.
+- **Root cause:** stays `unknown` unless the evidence establishes it. It is never inferred from an alert name.
+- **Resolution:** an incident is reported `resolved` only when the evidence includes complete recovery verification.
+- **Incident report:** follows the runbook's incident template:
+  - alert, severity, classification, and status;
+  - UTC timeline;
+  - evidence summary, root cause, and actions taken;
+  - verification status and follow-ups.
+
+  Every report is marked as requiring developer review.
+
+Usage, from the repository root:
+
+```powershell
+python custom-agent/oncall_investigator.py EVIDENCE.json            # Markdown report
+python custom-agent/oncall_investigator.py EVIDENCE.json --json     # JSON report
+python custom-agent/oncall_investigator.py EVIDENCE.json --output report.md
+```
+
+Exit code `0` means a report was produced; `2` means the input was rejected. `--output` only creates a new file and never overwrites an existing one.
+
+**Boundaries:**
+
+- No live telemetry integration: it does not query Prometheus, Grafana, Loki, or Tempo.
+- No automatic alert triggering: it runs only when a developer starts it.
+- No remediation: it takes no actions and only reports.
+- No network, database, Docker, or shell access, and no LLM calls. Nothing in the input is executed.
+- Reports contain no request bodies, resume text, job descriptions, or secrets.
+
+**Verification:**
+
+- 32 of 32 investigator tests and 38 of 38 custom-agent tests passed locally. The tests use synthetic input only.
+- The investigator was committed as `ae8a0ab`.
+- GitHub Actions CI run #27 passed all five jobs.
+
 ### Current Limitations
 
 CareerPilot does not currently provide:
 
 - An operational alert that activates an on-call agent.
+- On-Call Investigator integration with live telemetry or real alerts.
 - Automated incident investigation based on local or production telemetry.
 - An agent that diagnoses and fixes user-impacting failures.
 - Verified automated remediation with incident audit records.
@@ -671,6 +722,8 @@ Any future on-call agent should operate within explicit permission boundaries, m
 - [Agent Permissions](docs/permissions.md)
 - [Security Reviewer](.agents/agents/security-reviewer.md)
 - [Release Auditor](custom-agent/release_auditor.py)
+- [On-Call Investigator](custom-agent/oncall_investigator.py)
+- [On-Call Investigator Tests](custom-agent/tests/test_oncall_investigator.py)
 - [Incident Response Runbook](monitoring/INCIDENT_RESPONSE.md)
 - [AI Development Log](docs/ai-development-log.md)
 

@@ -1347,3 +1347,117 @@ The stack predates the alerting work. This summary comes from the Git history an
 ### Outcome
 
 CareerPilot now has local Prometheus alerting on its OpenTelemetry metrics: four rules, validated by `promtool` locally and, as reported by the developer, by the `monitoring-config` CI job. A local incident response runbook covers all four alerts and separates expected missing telemetry from real incidents. Monitoring remains local-only, and the Render deployment remains on hold.
+
+## Entry 014 — Read-Only On-Call Investigator
+
+**Date:** October 25, 2026
+**AI Coding Agent:** Claude Code (Claude Opus 5.5)
+**Development Method:** Human-supervised, agent-assisted implementation
+**Status:** Committed on `main` as `ae8a0ab` and pushed by the developer. Developer-verified results:
+- local tests: 32 of 32 investigator tests and 38 of 38 custom-agent tests passed;
+- GitHub Actions CI run #27 passed all five jobs.
+
+The README On-Call Agent update that followed is not yet committed. Render deployment remains **on hold**.
+
+### Objective
+
+Add a first, minimal on-call investigation agent. It is deterministic and read-only, it turns synthetic alert evidence into a structured incident report that follows `monitoring/INCIDENT_RESPONSE.md`, and it has no live connections and takes no remediation actions.
+
+### Tasks and Prompts (summarized)
+
+1. **Implementation request.** The developer asked for a deterministic, read-only incident investigator that reads synthetic alert evidence from a local JSON file. The requirements:
+   - recognize exactly the four Prometheus alerts and their severities;
+   - validate the input strictly and never execute anything from it;
+   - prioritize Collector-down alerts;
+   - treat missing telemetry as needing investigation unless explicit evidence shows it is expected;
+   - report root cause as unknown unless established;
+   - never claim resolution without verification evidence;
+   - keep secrets and raw content out of reports;
+   - use the standard library only, with isolated synthetic tests.
+
+   Scope was exactly two new files. Tests were not to be run at that step.
+2. **README update.** Document the investigator in the README's On-Call Agent section, using the developer's verified results.
+3. **This log entry.**
+
+### Context Supplied
+
+- `AGENTS.md` and `monitoring/INCIDENT_RESPONSE.md`.
+- `monitoring/alerts/careerpilot.rules.yml`.
+- `custom-agent/release_auditor.py` and `custom-agent/tests/test_release_auditor.py`, for conventions.
+- For the README and this entry: the committed `custom-agent/oncall_investigator.py`, the README On-Call Agent section, and this log.
+
+### Files Changed
+
+- **`custom-agent/oncall_investigator.py`** (new, 464 lines; `ae8a0ab`). A standard-library-only CLI that takes one evidence file and optional `--json` and `--output` arguments.
+  - **Input:** a strict schema (`schema_version: 1`, `"synthetic": true` required). Unknown alert names, invalid states, malformed or non-UTC-convertible timestamps, unknown fields, and over-long, multi-line, or secret-like text are rejected. Error messages name fields but never repeat input values.
+  - **Alerts:** the four alerts and their documented severities, with Collector-down investigated first.
+  - **Missing telemetry:** an incident when the Collector is down; expected only with explicit evidence (OTLP export disabled, backend not running, or no requests served yet); otherwise `needs-investigation`.
+  - **Root cause:** `unknown` unless the evidence establishes it.
+  - **Resolution:** `resolved` only with complete verification evidence (runbook section 8).
+  - **Report:** a Markdown or JSON report following the runbook's incident template.
+  - **Output files:** `--output` only creates a new file.
+- **`custom-agent/tests/test_oncall_investigator.py`** (new, 367 lines, 32 tests; `ae8a0ab`). It covers:
+  - all four alerts, and a drift check against the rules file;
+  - Collector priority;
+  - expected versus unexpected missing telemetry;
+  - root cause and resolution rules;
+  - malformed input and privacy restrictions;
+  - the CLI, using temporary directories only.
+- **`README.md`** (On-Call Agent section; not yet committed): the investigator, its input, supported alerts, prioritization, reports, CLI usage, boundaries, and verified results.
+- **Documentation:** this entry.
+
+### Boundaries
+
+The investigator has none of the following:
+
+- live telemetry connections (no Prometheus, Grafana, Loki, or Tempo queries);
+- automatic triggering by alerts;
+- remediation;
+- database access or Docker operations;
+- network or shell access;
+- LLM calls.
+
+It reads only the evidence file the developer names. It writes only an explicitly requested new report file.
+
+### Manual Review and Corrections
+
+- **Agent self-correction:** while reviewing its own tests before handing them over, Claude Code found that the import check passed `^`-anchored patterns to `assertNotRegex` without multiline matching. That would have checked only the first line of the source file. The pattern was corrected to use `(?m)`.
+- **Outdated context:** while documenting the investigator, Claude Code initially relied on outdated Git and test context. It described the investigator as uncommitted and its tests as not yet run. The developer corrected this and supplied the verified results. The README was then updated using those results.
+- **Developer review:** the developer reviewed the changes, ran the tests, verified the staged files, committed, pushed, and checked CI.
+
+### Tests Executed
+
+**Local (run by the developer):**
+
+- Investigator tests: 32 of 32 passed.
+- All custom-agent tests (`custom-agent/tests`): 38 of 38 passed.
+
+**GitHub Actions (checked by the developer):**
+
+- CI run #27 passed all five jobs.
+
+**Claude Code** did not run tests in this entry's work, as instructed. For the README update it ran only `git diff --stat` and `git diff --check`; the check was clean.
+
+### Human Oversight
+
+- **Done by the developer:** reviewed the changes, ran the tests, verified the staged files, committed `ae8a0ab`, pushed it to `main`, and checked CI.
+- **What Claude Code did not do:** stage, commit, push, or deploy.
+- **What did not happen:**
+  - no access to or changes in the development PostgreSQL database or the protected backups;
+  - no Docker operations;
+  - no Render changes;
+  - no `.env` file or secret was read.
+
+### Remaining Work
+
+- **Not implemented** (none of these should be described as available):
+  - live, read-only telemetry integration (Prometheus, Loki, Tempo);
+  - operational alert triggering of the investigator;
+  - any remediation.
+- **Further verification:** the investigator has been exercised with synthetic evidence only, not against real alerts or a running monitoring stack.
+- **Documentation:** commit the README On-Call Agent update. `docs/agent-extension-pack.md` and `docs/permissions.md` do not yet describe the investigator.
+- **Render deployment** remains on hold.
+
+### Outcome
+
+CareerPilot now has a deterministic, read-only On-Call Investigator. It turns synthetic evidence for its four local Prometheus alerts into runbook-style incident reports, prioritizing Collector outages and separating expected missing telemetry from incidents. It is tested locally (32 of 32) and in CI (run #27). It does not read live telemetry, is not triggered by alerts, and does not remediate.

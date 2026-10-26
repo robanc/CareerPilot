@@ -1740,3 +1740,121 @@ Database, Docker, deployment, network, staging, commit, and push operations were
 ### Outcome
 
 The README now presents run #30 as the current CI evidence, links the Issue #3 review, marks the public deployment as on hold with the root cause unconfirmed, separates verified local observability from unverified end-to-end correlation and production alerting, and states plainly that on-call rubric credit is not claimed. Duplicated testing, CI/CD, and setup content was merged without dropping commands, safeguards, or evidence.
+
+## Entry 018 — Synthetic-Only On-Call Responder
+
+**Date:** October 26, 2026
+**AI Coding Agent:** Claude Code (Claude Opus 5.5)
+**Development Method:** Human-supervised, agent-assisted implementation
+**Status:** Implemented, not committed. Local offline tests: 90 custom-agent tests, 87 passed and 3 skipped (symlink tests; see below). No CI run yet. Render deployment remains **on hold**.
+
+### Objective
+
+Implement the plan from Claude Code's read-only feasibility review: an on-call agent that a (synthetic) alert wakes, which applies one allowlisted, reversible repair, verifies it, rolls back on failure, and keeps an audit trail. It works only in a disposable synthetic sandbox and never on the real application or any live service.
+
+### Task and Prompt (summarized)
+
+1. **Feasibility review (read-only).** The developer asked for the smallest safe end-to-end design using disposable synthetic fixtures, an allowlisted reversible repair, post-repair verification, and audit logging. Claude Code proposed it and listed open decisions:
+   - an investigator approval value;
+   - a runbook exception for the synthetic sandbox;
+   - the fixture style.
+2. **Implementation.** The developer approved the plan, with these requirements:
+   - a standard-library sandbox and spool;
+   - bounded `--once` and `--watch` modes;
+   - one repair, for `CareerPilotHigh5xxRate` only;
+   - a SHA-256 pre-repair backup, verification at the alert thresholds, and rollback;
+   - duplicate fingerprint protection and a privacy-safe JSONL audit log;
+   - reuse of the investigator, adding only the `automated-synthetic-repair` approval value;
+   - documentation that separates sandbox repair from real-service remediation.
+
+   Work was limited to `custom-agent/`, `monitoring/INCIDENT_RESPONSE.md`, `docs/permissions.md`, `docs/agent-extension-pack.md`, `README.md`, and this log. Only offline custom-agent tests and `git diff --check` were to be run.
+
+### Context Reviewed
+
+- `AGENTS.md`, `docs/permissions.md`, and `agent-hooks/guard.py` (protected-file rules).
+- `docs/agent-extension-pack.md` and `monitoring/INCIDENT_RESPONSE.md`.
+- `monitoring/alerts/careerpilot.rules.yml`.
+- `custom-agent/oncall_investigator.py`, `custom-agent/prometheus_alert_adapter.py`, and their tests.
+
+### Files Changed
+
+- **`custom-agent/synthetic_sandbox.py`** (new):
+  - creates a marked sandbox under the system temp directory, holding a service config with a `fault_5xx` switch, a known-good copy, an alert spool, and a marker with a random nonce;
+  - fault injection: a config fault, or a persistent fault the repair cannot clear, used to test rollback;
+  - writes synthetic alert events;
+  - a `SyntheticService` that returns 500 while a fault is active;
+  - a guarded `remove_sandbox` that refuses unmarked directories.
+- **`custom-agent/oncall_responder.py`** (new):
+  - **Sandbox check:** marker, inside temp, outside the repository, no symlinks or junctions, checked on every file access.
+  - **Events:** strict validation (synthetic only, the four alerts and their severities, timezone-aware and not in the future, 16-hex fingerprint).
+  - **Modes:** `--once`, and `--watch` (1–100 cycles, 1–60 s apart).
+  - **Before the repair:** the 5xx condition is confirmed first, and an exclusive SHA-256-checked backup is written.
+  - **Repair and verification:** an atomic restore of the known-good config, then a check over 20 synthetic requests against the rule thresholds (0.05, minimum 10).
+  - **Rollback:** a hash-checked restore when verification fails.
+  - **Duplicates:** fingerprint protection kept in the audit log, so it survives restarts.
+  - **Audit:** field-allowlisted JSON Lines entries.
+  - **Report:** produced through the investigator.
+  - **CLI:** `--demo`, `--json`, and exit codes 0/1/2.
+- **`custom-agent/tests/test_oncall_responder.py`** (new, 30 tests). Covers:
+  - wake (empty spool, one cycle, bounded watch, rejected events);
+  - success and no repair when the condition is not observed;
+  - rollback and a refused repair when the known-good config is invalid;
+  - the alert allowlist and pending alerts;
+  - sandbox escapes (repository, non-temp, unmarked or forged marker, CLI against the repository);
+  - symlinks (root, config, spool event);
+  - duplicates, including across responder restarts;
+  - audit privacy, threshold consistency with the rules file, source boundaries, and CLI safety;
+  - sandbox removal.
+- **`custom-agent/oncall_investigator.py`:** only adds `automated-synthetic-repair` to `APPROVALS`.
+- **`custom-agent/tests/test_oncall_investigator.py`:** one new test that the value is accepted and reported as distinct from `approved-by-developer`.
+- **`monitoring/INCIDENT_RESPONSE.md`:** §2 now limits the approval requirement explicitly to real services and states the separate synthetic sandbox rule. A new §12, "Synthetic Sandbox Responder", and a Known Limitations bullet were added.
+- **`docs/permissions.md`:** scope entries for the investigator, adapter, and responder, and a table comparing synthetic sandbox repair with real-service remediation.
+- **`docs/agent-extension-pack.md`:**
+  - the outdated status and "no network access" claims are corrected;
+  - rows for the investigator, adapter, and responder;
+  - limitations for the synthetic-only scope and for symlink tests.
+- **`README.md`:**
+  - an On-Call Responder row in the agent table, and the testing and CI table rows;
+  - the Observability limitation and the Alerting incident-response line;
+  - On-Call Agent: the intro, capabilities, a new "On-Call Responder (Synthetic Only)" subsection, a rewritten Rubric Status (partial, synthetic fixtures only, credit not guaranteed), limitations, and references.
+- **`docs/ai-development-log.md`:** this entry.
+
+### Manual Review and Corrections
+
+- **Agent self-corrections before the first test run:**
+  - the audit log path is now rechecked for symlinks on every write, not only at startup;
+  - the duplicate tests would have written byte-identical events, which the content-hash check skips before the fingerprint check is reached, so they now use different `starts_at` values;
+  - the demo cleanup test compared real file times with the fixed test clock, so it now compares temp-directory listings before and after.
+- **Design choices:**
+  - the repair runs only after the fault condition is observed;
+  - root cause is reported as established only when the original config had `fault_5xx: true` and verification passed;
+  - `otlp_export` is reported as `disabled` (the sandbox exports no telemetry) only for resolved incidents, so an open 5xx incident is not flagged as inconsistent.
+- **Developer review:** pending.
+
+### Tests Executed (local, offline)
+
+- `python -m unittest discover -s custom-agent/tests -p "test_oncall_responder.py"`: 30 tests, 27 passed, **3 skipped**. The three symlink-refusal tests skip because this Windows account cannot create symlinks; they are unverified locally and are expected to run on Linux CI.
+- `python -m unittest discover -s custom-agent/tests`: **90 tests, 87 passed, 3 skipped** (the same three).
+- `python -m unittest discover -s custom-agent/tests -p "test_oncall_investigator.py"`: 33 of 33 passed.
+- The `--demo` CLI was exercised only through the tests, including one subprocess run.
+- `git diff --check`: clean.
+- Not run: backend tests, frontend checks, CI, or any live service.
+
+### Safety
+
+- No PostgreSQL access, and no access to the protected backups, `.env`, secrets, or credentials.
+- No Docker, Render, live services, or network.
+- All test sandboxes were created under the system temp directory and removed afterwards.
+- Nothing was staged, committed, or pushed.
+
+### Limitations
+
+- **Synthetic only.** The responder is woken by synthetic spool events, not by real Prometheus alerts (no Alertmanager or webhook is configured). It repairs only a disposable sandbox, never the CareerPilot application or any live service.
+- **One repairable alert.** The other three alerts are report-only.
+- **Rubric credit is not guaranteed.** The README describes the on-call criterion as only partially addressed, with synthetic fixtures.
+- **Unverified locally:** the symlink-refusal tests. The responder tests have not yet run in CI.
+- **The audit log is not tamper-proof.** It is append-only by convention only.
+
+### Outcome
+
+CareerPilot now demonstrates an alert-activated, allowlisted, verified, reversible repair with an audit trail, end to end, inside a disposable synthetic sandbox. Real-service remediation still requires developer approval, and the documentation states that this is synthetic-only and does not fix live services.

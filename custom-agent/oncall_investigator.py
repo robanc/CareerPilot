@@ -52,7 +52,9 @@ OTLP_METRIC_ALERTS = ("CareerPilotHigh5xxRate", "CareerPilotHighAverageLatency")
 
 STATES = ("pending", "firing", "inactive")
 SOURCES = ("prometheus", "grafana", "loki", "tempo", "developer")
-APPROVALS = ("read-only", "approved-by-developer")
+# automated-synthetic-repair: the allowlisted repair oncall_responder.py applies
+# inside a disposable synthetic sandbox only; never a real-service action.
+APPROVALS = ("read-only", "approved-by-developer", "automated-synthetic-repair")
 OTLP_STATES = ("enabled", "disabled", "unknown")
 FLAGS = ("backend_running", "backend_served_requests", "backend_in_docker", "collector_up")
 VERIFICATION_KEYS = ("alert_inactive", "incident_check_passed", "no_unapproved_changes",

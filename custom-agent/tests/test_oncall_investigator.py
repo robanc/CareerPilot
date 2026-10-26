@@ -188,6 +188,15 @@ class RootCauseAndResolution(unittest.TestCase):
                                   otlp_export="disabled", verification=verification))
         self.assertEqual(report["status"], "resolved")
 
+    def test_automated_synthetic_repair_is_a_distinct_approval_value(self):
+        report = run(evidence_doc(alert("CareerPilotHigh5xxRate"), actions=[
+            {"time": T1, "action": "Restored the synthetic sandbox config.",
+             "approval": "automated-synthetic-repair"}]))
+        self.assertEqual(report["actions_taken"]["recorded"][0]["approval"],
+                         "automated-synthetic-repair")
+        self.assertIn("automated-synthetic-repair", oi.render_markdown(report))
+        self.assertNotIn("approved-by-developer", oi.render_markdown(report))
+
     def test_timeline_is_sorted_and_normalized_to_utc(self):
         report = run(evidence_doc(
             alert("CareerPilotHigh5xxRate", active_at="2026-10-25T22:00:00+02:00"),

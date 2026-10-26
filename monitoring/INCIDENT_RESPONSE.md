@@ -40,7 +40,15 @@ developer or an AI agent is responding.
   and status commands only.
 - **Developer approval is required** before any restart,
   container recreation, configuration change, code change,
-  or other remediation.
+  or other remediation of a real service: the CareerPilot
+  application, its databases, containers, the monitoring
+  stack, or Render. There is no exception for real services.
+- **Synthetic sandbox repair is separate.** The automated
+  responder in [section 12](#12-synthetic-sandbox-responder)
+  may apply its one allowlisted repair without approval,
+  but only inside a disposable synthetic sandbox. It never
+  acts on a real service, and nothing in this runbook
+  authorizes it to.
 - **No database changes.** Do not run `DROP`, `TRUNCATE`,
   bulk `DELETE`, migrations, or resets. Do not connect to the
   development database without explicit approval. Never point
@@ -505,3 +513,50 @@ AI-assisted incident response must also be logged in
 - Alert firing and clear-down timings are derived from rule
   configuration and synthetic `promtool` tests, not measured
   on the live stack.
+- The automated responder (section 12) works only on
+  synthetic sandboxes. No real alert wakes it, and it repairs
+  no real service.
+
+## 12. Synthetic Sandbox Responder
+
+`custom-agent/oncall_responder.py` demonstrates alert-activated
+remediation **in a disposable synthetic sandbox only**. It does
+not respond to real alerts and does not repair the real
+application, its databases, containers, the monitoring stack, or
+Render. Real incidents follow sections 2 to 10 above, with
+developer approval for every remediation.
+
+How it works:
+
+- **Sandbox:** a new temporary directory created by
+  `custom-agent/synthetic_sandbox.py`. It holds a marker file, a
+  synthetic service config with a fault switch, a known-good copy
+  of that config, a spool for synthetic alert events, and the
+  audit log. The responder refuses any directory without the
+  marker, outside the system temp directory, inside the
+  repository, or containing symlinks.
+- **Wake:** a new synthetic alert event in the spool. `--once`
+  scans once; `--watch` scans a bounded number of times.
+- **Allowlist:** only `CareerPilotHigh5xxRate` has a repair:
+  restore the sandbox's known-good service config. The other
+  three alerts are report-only.
+- **Safeguards:**
+  - the repair runs only if the 5xx condition is observed first;
+  - the config is backed up and checked by SHA-256 beforehand;
+  - each alert fingerprint is acted on at most once.
+- **Verification:** the alert rule's own thresholds (5xx ratio at
+  most 0.05 over at least 10 synthetic requests).
+- **Rollback:** if verification fails, the original config is
+  restored and checked by hash, and the incident stays open.
+- **Audit:** a JSON Lines log of steps, hashes, counts, and
+  outcomes, never file contents, paths, or event payloads.
+- **Report:** produced by `custom-agent/oncall_investigator.py`.
+  The repair is recorded with the approval value
+  `automated-synthetic-repair`, never as developer-approved.
+
+Try it, from the repository root (it creates, repairs, and then
+removes its own sandbox):
+
+```powershell
+python custom-agent/oncall_responder.py --demo
+```

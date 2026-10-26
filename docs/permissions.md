@@ -52,6 +52,35 @@ enforced. The policy comes from `AGENTS.md` ("Security Boundaries") and
 - **Custom agent** (`custom-agent/release_auditor.py`): uses only the tools
   the MCP server offers. It refuses any other tool and records every call in
   an audit log, with argument sizes only.
+- **On-call investigator** (`custom-agent/oncall_investigator.py`): reads one
+  synthetic evidence file and writes a report. It takes no actions.
+- **Prometheus alert adapter** (`custom-agent/prometheus_alert_adapter.py`):
+  one read-only GET to the fixed local Prometheus alerts endpoint, and only
+  with `--connect`.
+- **On-call responder** (`custom-agent/oncall_responder.py`): the only
+  component that changes anything without per-action approval, and only
+  inside a disposable synthetic sandbox (`custom-agent/synthetic_sandbox.py`).
+  - It refuses any directory that lacks the sandbox marker, is outside the
+    system temp directory or inside the repository, or contains symlinks.
+  - Its one allowlisted repair, for `CareerPilotHigh5xxRate` only, restores
+    the sandbox's known-good config. The repair is backed up, verified, and
+    rolled back if verification fails.
+  - It records every step in a JSON Lines audit log (hashes and counts, never
+    contents), and reports the repair as `automated-synthetic-repair`.
+  - It has no network, database, Docker, or shell access.
+
+## Synthetic sandbox repair versus real-service remediation
+
+| | Synthetic sandbox repair | Real-service remediation |
+|---|---|---|
+| Target | A disposable temporary directory created by `synthetic_sandbox.py` | The CareerPilot application, its databases, containers, the monitoring stack, or Render |
+| Who acts | `oncall_responder.py`, automatically | A developer, or an agent with explicit developer approval per action |
+| Allowed actions | One allowlisted, reversible config restore | Whatever the developer approves (`monitoring/INCIDENT_RESPONSE.md`) |
+| Approval | None per action; bounded by the allowlist and sandbox checks | **Always required** |
+| Recorded as | `automated-synthetic-repair` | `approved-by-developer` |
+
+No rule in this document lets the responder, or any agent, remediate a real
+service without the developer's approval.
 
 ## Activation
 

@@ -75,6 +75,7 @@ CareerPilot was developed using a human-supervised, AI-assisted development work
 | Security Reviewer | Specialized subagent | Performs read-only security reviews of code changes against `AGENTS.md` and the project's security protections. |
 | Release Auditor | Deterministic custom agent | Performs six reproducible release checks using approved read-only MCP tools and writes an audit log without recording submitted content. |
 | On-Call Investigator | Deterministic custom agent (synthetic-only) | Turns synthetic alert evidence into runbook-style incident reports; read-only and non-remediating (see [On-Call Agent](#on-call-agent)). |
+| On-Call Responder | Deterministic custom agent (synthetic sandbox only) | Wakes on synthetic alert events and applies one allowlisted, verified, reversible repair to a disposable sandbox; never touches real services (see [On-Call Agent](#on-call-agent)). |
 
 ### Supporting Agent Components
 
@@ -195,7 +196,7 @@ CareerPilot uses automated backend, frontend, database integration, agent extens
 | Frontend tests | Vitest + React Testing Library | Verify frontend components and application behavior |
 | Code quality | ESLint | Check frontend code quality |
 | Frontend build | Vite | Verify the production frontend build |
-| Agent extension tests | `unittest` | Guardrail hook, MCP server, release auditor, On-Call Investigator (synthetic input), Prometheus alert adapter (mocked HTTP), skills and subagents |
+| Agent extension tests | `unittest` | Guardrail hook, MCP server, release auditor, On-Call Investigator (synthetic input), Prometheus alert adapter (mocked HTTP), On-Call Responder (disposable synthetic sandboxes), skills and subagents |
 | Alert rule tests | `promtool` | Synthetic time-series tests for the four Prometheus alert rules |
 | CI verification | GitHub Actions | Run automated checks on repository changes |
 
@@ -423,7 +424,7 @@ It can also be started manually (`workflow_dispatch`) or called by the deploymen
 |---|---|
 | Backend tests (pytest + PostgreSQL 16) | Installs `backend/requirements.txt` on Python 3.12, starts the isolated PostgreSQL 16 test container (`docker-compose.test.yml`, 127.0.0.1:5433), and runs `python -m pytest backend/tests` |
 | Frontend lint and build | `npm ci`, `npm run lint`, `npm test` (Vitest), and `npm run build` on Node.js 24 |
-| Agent extension tests | Guardrail hook, MCP server, custom agent (including the On-Call Investigator and Prometheus alert adapter tests), and skill/subagent checks (`unittest`, Python 3.12) |
+| Agent extension tests | Guardrail hook, MCP server, custom agent (including the On-Call Investigator, Prometheus alert adapter, and On-Call Responder tests; the responder tests were added after run #30), and skill/subagent checks (`unittest`, Python 3.12) |
 | Monitoring config and alert rule validation | `promtool check config`, `check rules`, and `test rules` from the pinned Prometheus image |
 | Docker image build verification | Validates `docker-compose.yml` and builds the backend and frontend images |
 
@@ -518,7 +519,7 @@ For detailed setup, telemetry queries, validation, and troubleshooting, see [Mon
 - Correlation has been checked only between backend logs and backend traces. End-to-end tracing and correlation across frontend, backend, and database operations have not been verified.
 - Production alert delivery is not configured: there is no Alertmanager, notification channel, or production alerting.
 - Business-level metrics for all job application workflows have not been verified.
-- Local Prometheus alert rules and a manual incident response runbook are in place; see [Alerting on User Impact](#alerting-on-user-impact). No alert notifications are configured, and AI-assisted incident response is not implemented (see [On-Call Agent](#on-call-agent)).
+- Local Prometheus alert rules and a manual incident response runbook are in place; see [Alerting on User Impact](#alerting-on-user-impact). No alert notifications are configured. Automated incident response exists only as a synthetic sandbox demonstration, and no real alert triggers it (see [On-Call Agent](#on-call-agent)).
 
 ### Privacy and Security
 
@@ -575,7 +576,7 @@ Firing alerts are visible at http://127.0.0.1:9090/alerts and through Grafana. `
 - expected versus unexpected missing telemetry;
 - recovery verification, escalation, and an incident report template.
 
-Restarts and remediation require developer approval.
+Restarts and remediation of real services require developer approval. The runbook's section 12 describes the separate, synthetic-only sandbox responder.
 
 ### Current Limitations
 
@@ -600,7 +601,7 @@ Potential future improvements include external uptime monitoring, notifications 
 
 ## On-Call Agent
 
-CareerPilot includes development-focused agent extensions, a manual [incident response runbook](monitoring/INCIDENT_RESPONSE.md) for its local alerts, and a deterministic, read-only On-Call Investigator that turns synthetic alert evidence into an incident report. An automated on-call agent that is triggered by alerts, reads live telemetry, or remediates incidents has not been implemented.
+CareerPilot includes development-focused agent extensions, a manual [incident response runbook](monitoring/INCIDENT_RESPONSE.md) for its local alerts, a deterministic, read-only On-Call Investigator, and a **synthetic-only** On-Call Responder. The responder demonstrates alert-activated repair inside a disposable synthetic sandbox. No agent is woken by real alerts, and none remediates the real application or any real service.
 
 ### Existing Agent Capabilities
 
@@ -611,12 +612,13 @@ The project includes:
 - **Guardrail Hook:** Prevents certain unsafe agent operations.
 - **Read-Only MCP Server:** Provides narrowly scoped tools for inspecting project information.
 - **On-Call Investigator:** A deterministic custom agent that produces runbook-style incident reports from synthetic alert evidence (see below).
+- **On-Call Responder (synthetic only):** A deterministic agent that wakes on synthetic alert events and repairs a disposable synthetic sandbox (see below).
 
-These components support safer development and release preparation. They are not connected to an operational alerting system and do not automatically remediate production incidents.
+These components support safer development and release preparation. They are not connected to an operational alerting system and do not remediate real or production incidents.
 
 ### Manual Incident Response
 
-The local Prometheus alerts are handled by a developer, or an AI agent under developer supervision, following [`monitoring/INCIDENT_RESPONSE.md`](monitoring/INCIDENT_RESPONSE.md). The runbook limits investigation to read-only steps and requires developer approval for restarts and remediation. No agent is triggered by an alert.
+The local Prometheus alerts are handled by a developer, or an AI agent under developer supervision, following [`monitoring/INCIDENT_RESPONSE.md`](monitoring/INCIDENT_RESPONSE.md). The runbook limits investigation to read-only steps and requires developer approval for every restart and remediation of a real service. No agent is triggered by a real alert.
 
 ### On-Call Investigator
 
@@ -687,23 +689,48 @@ python custom-agent/prometheus_alert_adapter.py --connect
 
 The adapter is not an automated agent: it runs only when a developer passes `--connect`, it is not triggered by alerts, and it fixes nothing.
 
+### On-Call Responder (Synthetic Only)
+
+[`custom-agent/oncall_responder.py`](custom-agent/oncall_responder.py) demonstrates the full wake, repair, verify, and audit loop **only inside a disposable synthetic sandbox** created by [`custom-agent/synthetic_sandbox.py`](custom-agent/synthetic_sandbox.py). It does not fix live services.
+
+```powershell
+python custom-agent/oncall_responder.py --demo                      # create, inject a fault, respond, remove
+python custom-agent/oncall_responder.py --sandbox DIR --once        # scan a sandbox's spool once
+python custom-agent/oncall_responder.py --sandbox DIR --watch --interval 5 --max-cycles 10
+```
+
+- **Sandbox:** a marked temporary directory holding a synthetic service config with a fault switch, a known-good copy, an alert-event spool, and the audit log. Any directory without the marker, outside the system temp directory, inside the repository, or containing symlinks is refused.
+- **Wake:** a new synthetic alert event (`"synthetic": true`, one of the four alerts) in the spool. `--once` scans once; `--watch` scans at most 100 times, 1 to 60 seconds apart.
+- **One allowlisted repair:** for `CareerPilotHigh5xxRate` only, restore the sandbox's known-good config. The other three alerts are report-only.
+- **Safeguards:**
+  - the repair runs only if the 5xx condition is observed first;
+  - the config is backed up and checked by SHA-256 before the repair;
+  - each alert fingerprint is acted on at most once.
+- **Verification and rollback:** the alert rule's thresholds (5xx ratio at most 0.05 over at least 10 synthetic requests). On failure, the original config is restored, checked by hash, and the incident stays open.
+- **Audit and report:** a JSON Lines audit log of steps, hashes, counts, and outcomes, never contents, paths, or payloads. The incident report comes from the On-Call Investigator, with the repair recorded as `automated-synthetic-repair`.
+- **No other access:** no network, database, Docker, shell, Render, or real CareerPilot code.
+
+Exit code `0` means no incident was left open, `1` that one was, and `2` that the sandbox or arguments were refused.
+
+**Verification:** the responder tests (30, of which 3 symlink-refusal tests skip on systems that cannot create symlinks) and the full custom-agent suite (90 tests, 3 skipped) passed locally, offline. They have not yet run in CI.
+
 ### Rubric Status
 
-Credit for the capstone's on-call agent criterion is **not claimed**. CareerPilot does not provide an agent that an alert activates and that investigates and fixes user-impacting failures:
+The capstone's on-call agent criterion is addressed **only partially, with synthetic fixtures**, and **credit is not guaranteed**:
 
-- the On-Call Investigator is synthetic-only, deterministic, read-only, and non-remediating;
-- the Prometheus alert adapter is a read-only, opt-in snapshot tool, not an alert-triggered or fixing agent;
-- the two are deliberately not connected.
+- **Demonstrated, synthetic only:** an agent that a (synthetic) alert event wakes, which applies an allowlisted, reversible repair, verifies it, rolls back on failure, and leaves an audit trail.
+- **Not provided:** waking on real Prometheus alerts (no Alertmanager or webhook is configured), or repairing the real application or any real service.
+- **The other components:** the On-Call Investigator is synthetic-only, deterministic, read-only, and non-remediating; the Prometheus alert adapter is a read-only, opt-in snapshot tool. The adapter is deliberately not connected to the investigator or the responder.
 
 ### Current Limitations
 
 CareerPilot does not currently provide:
 
-- An operational alert that activates an on-call agent.
-- On-Call Investigator integration with live telemetry or real alerts.
+- A real (non-synthetic) alert that activates an on-call agent.
+- On-Call Investigator or Responder integration with live telemetry or real alerts.
 - Automated incident investigation based on local or production telemetry.
-- An agent that diagnoses and fixes user-impacting failures.
-- Verified automated remediation with incident audit records.
+- An agent that diagnoses and fixes user-impacting failures in the real application.
+- Automated remediation of any real service. The only automated repair is the synthetic sandbox repair.
 
 Any future on-call agent should operate within explicit permission boundaries, maintain an audit trail, and require human approval before performing potentially destructive operations.
 
@@ -717,6 +744,9 @@ Any future on-call agent should operate within explicit permission boundaries, m
 - [On-Call Investigator Tests](custom-agent/tests/test_oncall_investigator.py)
 - [Prometheus Alert Adapter](custom-agent/prometheus_alert_adapter.py)
 - [Prometheus Alert Adapter Tests](custom-agent/tests/test_prometheus_alert_adapter.py)
+- [On-Call Responder (synthetic only)](custom-agent/oncall_responder.py)
+- [Synthetic Sandbox](custom-agent/synthetic_sandbox.py)
+- [On-Call Responder Tests](custom-agent/tests/test_oncall_responder.py)
 - [Incident Response Runbook](monitoring/INCIDENT_RESPONSE.md)
 - [AI Development Log](docs/ai-development-log.md)
 

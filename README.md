@@ -42,7 +42,7 @@ In local mode, CareerPilot provides a full-stack application using a React front
 
 CareerPilot also includes a separate public demonstration mode designed to use fictional data and prevent modifications. In this mode, write operations are blocked and the Resume Library is unavailable.
 
-The public demonstration deployment is currently pending completion of database provisioning and security verification.
+The public demonstration deployment on Render is **on hold** because of an unresolved PostgreSQL authentication failure (see [Deployment](#deployment)).
 
 
 ## Product Specification
@@ -51,14 +51,15 @@ CareerPilot is an AI-assisted job application tracking and career preparation pl
 
 The product provides application management with search and status filtering, a dashboard showing application activity and upcoming interviews, interview scheduling and preparation notes, deterministic keyword-based resume matching, and a local Resume Library. Application records and saved resumes persist in PostgreSQL.
 
-The MVP requirements, functional specifications, user stories, expected behavior, scope, and feature-level acceptance criteria are documented in the [Product Specification](product-spec.md). The application also includes a separate read-only public demonstration mode designed for fictional data, with deployment pending security verification.
+The MVP requirements, functional specifications, user stories, expected behavior, scope, and feature-level acceptance criteria are documented in the [Product Specification](product-spec.md). The application also includes a separate read-only public demonstration mode designed for fictional data; its Render deployment is on hold.
 
 Development and outstanding work are tracked through the public [GitHub Issues tracker](https://github.com/robanc/CareerPilot/issues).
 
 **Tracked issue:**
-- [Issue #3 — Resolve Render PostgreSQL authentication and verify public demo](https://github.com/robanc/CareerPilot/issues/3) — Open; blocked pending Render Support. Includes explicit acceptance criteria and deployment verification requirements.
+- [Issue #3 — Resolve Render PostgreSQL authentication and verify public demo](https://github.com/robanc/CareerPilot/issues/3) — Open; on hold pending Render Support. Includes explicit acceptance criteria and deployment verification requirements.
+  - [Claude Code review of Issue #3](https://github.com/robanc/CareerPilot/issues/3#issuecomment-6406935494): a read-only comparison of the implementation with the issue's acceptance criteria. The issue remains open.
 
-Coding-agent participation is documented separately in [AI Development Log](docs/ai-development-log.md). Any issue-specific agent activity will be linked to its actual implementation and verification evidence.
+Coding-agent participation is documented separately in [AI Development Log](docs/ai-development-log.md). Issue-specific agent activity is linked to its evidence; the Issue #3 review is recorded in Entry 016.
 
 
 ## Agent Team Specification
@@ -73,6 +74,7 @@ CareerPilot was developed using a human-supervised, AI-assisted development work
 | Claude Code | Primary coding agent | Assists with implementation, debugging, test development, documentation, and reviewing changes under project instructions. |
 | Security Reviewer | Specialized subagent | Performs read-only security reviews of code changes against `AGENTS.md` and the project's security protections. |
 | Release Auditor | Deterministic custom agent | Performs six reproducible release checks using approved read-only MCP tools and writes an audit log without recording submitted content. |
+| On-Call Investigator | Deterministic custom agent (synthetic-only) | Turns synthetic alert evidence into runbook-style incident reports; read-only and non-remediating (see [On-Call Agent](#on-call-agent)). |
 
 ### Supporting Agent Components
 
@@ -155,13 +157,7 @@ After configuring the required PostgreSQL environment variables in `.env`, start
 docker compose up --build --detach
 ```
 
-The application is configured to run at:
-
-- **Frontend:** http://127.0.0.1:8080
-- **Backend:** http://127.0.0.1:8002
-- **API documentation:** http://127.0.0.1:8002/docs
-
-Docker Compose starts PostgreSQL, waits for the database health check before starting the backend, and starts the frontend container.
+Docker Compose starts PostgreSQL, waits for the database health check before starting the backend, and starts the frontend container. Service addresses are listed under [Local Service Addresses](#local-service-addresses); the frontend runs at http://127.0.0.1:8080.
 
 ### End-to-End Functionality
 
@@ -182,48 +178,48 @@ Application and saved-resume records are stored in PostgreSQL. The Docker Compos
 - [Backend Source](backend/)
 - [API Contract](openapi.yaml)
 
-The public demonstration environment is separate from the local application and remains pending database authentication and security verification.
+The public demonstration environment is separate from the local application; its deployment is on hold (see [Deployment](#deployment)).
 
 
 ## Testing
 
-CareerPilot uses automated backend, frontend, and database integration tests to validate application functionality, API behavior, security controls, and persistence.
+CareerPilot uses automated backend, frontend, database integration, agent extension, and alert rule tests to validate application functionality, API behavior, security controls, and persistence. All tests use synthetic or fictional data.
 
 ### Test Coverage
 
 | Test Category | Framework / Tool | Purpose |
 |---|---|---|
 | Backend unit tests | Pytest | Validate application logic, input validation, and API behavior |
-| Observability tests | Pytest | Verify OpenTelemetry instrumentation, HTTP metrics, structured logging, and trace correlation |
+| Observability tests | Pytest | Verify request IDs, structured request logging, Prometheus HTTP metrics, and access rules for the local `/metrics` endpoint |
 | Database integration tests | Pytest + PostgreSQL 16 | Verify database interactions, persistence, and security behavior |
 | Frontend tests | Vitest + React Testing Library | Verify frontend components and application behavior |
 | Code quality | ESLint | Check frontend code quality |
 | Frontend build | Vite | Verify the production frontend build |
+| Agent extension tests | `unittest` | Guardrail hook, MCP server, release auditor, On-Call Investigator (synthetic input), Prometheus alert adapter (mocked HTTP), skills and subagents |
+| Alert rule tests | `promtool` | Synthetic time-series tests for the four Prometheus alert rules |
 | CI verification | GitHub Actions | Run automated checks on repository changes |
 
 ### Backend Tests
 
-Backend tests run against a separate, disposable PostgreSQL database rather than the local development database.
+Backend tests run only against a disposable, isolated PostgreSQL 16 container on 127.0.0.1:5433 (`docker-compose.test.yml`), never the development database.
 
-**1. Start the isolated test database:**
+**1. Start the isolated test database once:**
 
 ```powershell
 docker compose -p careerpilot-test -f docker-compose.test.yml up --detach --wait
 ```
 
-**2. Run the complete backend test suite:**
+**2. Run the complete backend test suite** from the repository root, with the backend virtual environment's Python 3.12 first on PATH (Windows):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\ops\test-backend.ps1
 ```
 
-The test runner validates the test container's identity, health, port configuration, and database markers before executing Pytest. It does not start, stop, recreate, or remove containers.
-
-Once the test database is running, the full backend test suite can be executed with a single command.
+The runner (`ops/test-backend.ps1`) uses only that container, which must already be running and healthy; it never starts, stops, recreates, or removes containers. It verifies the container's configuration and the cluster's identity, disables `.env` loading, and sets the test connection variables. As a second safety net, `backend/tests/conftest.py` refuses any database endpoint other than 127.0.0.1:5433.
 
 ### Frontend Tests
 
-From the repository root:
+Vitest runs with jsdom and a mocked API, so no backend is needed. From the repository root:
 
 ```powershell
 cd frontend
@@ -233,18 +229,27 @@ npm test
 npm run build
 ```
 
-The `npm test` command runs the frontend test suite using Vitest.
+### Agent Extension Tests
+
+With Python 3.12, after installing `backend/requirements.txt` (the MCP server imports backend modules that need the OpenTelemetry dependencies):
+
+```powershell
+python -m unittest discover -s agent-hooks/tests
+python -m unittest discover -s mcp-server/tests
+python -m unittest discover -s custom-agent/tests
+python -m unittest discover -s .agents/tests
+python custom-agent/release_auditor.py
+```
+
+The On-Call Investigator tests use synthetic input only, and the Prometheus alert adapter tests use mocked HTTP responses only.
 
 ### Continuous Integration
 
-CareerPilot's GitHub Actions CI pipeline runs automated verification for backend tests, frontend linting and tests, agent extensions, and Docker Compose configuration.
-
-GitHub Actions CI run #21 passed all four jobs on commit `3ea8ed6`, including backend tests, frontend checks, agent extension tests, and Docker image build verification.
-
-See [.github/workflows/ci.yml](.github/workflows/ci.yml) for the CI workflow definition.
+All of these suites, plus the `promtool` alert rule checks, run in GitHub Actions. See [CI/CD](#cicd) for the pipeline and the latest verified run.
 
 ### Testing Safety
 
+- Tests and demonstrations use synthetic or fictional data only. Tests must never read or alter existing development database records.
 - Backend tests use the dedicated `careerpilot_test` database.
 - The backend test runner disables `.env` loading and isolates database environment variables.
 - Tests must not run against the development or production database.
@@ -256,45 +261,8 @@ See [.github/workflows/ci.yml](.github/workflows/ci.yml) for the CI workflow def
 - [Backend Tests](backend/tests/)
 - [Frontend Test Configuration](frontend/package.json)
 - [Test Database Configuration](docker-compose.test.yml)
-
-### Additional Testing Details
-
-**Backend.** The tests run only against a disposable, isolated PostgreSQL 16 container on
-127.0.0.1:5433 (`docker-compose.test.yml`), never the development database.
-
-- **Start the container once,** yourself:
-
-      docker compose -p careerpilot-test -f docker-compose.test.yml up --detach --wait
-
-- **Then run the tests** from the repository root, with the backend virtual environment's
-  Python first on PATH (Windows):
-
-      powershell -NoProfile -ExecutionPolicy Bypass -File .\ops\test-backend.ps1
-
-- **What the runner does** (`ops/test-backend.ps1`):
-  - It uses only that container, which must already be running and healthy; it never creates,
-    starts, or recreates containers.
-  - It verifies the container's configuration and the cluster's identity.
-  - It disables `.env` loading and sets the test connection variables.
-- **Safety net in the tests themselves:** `backend/tests/conftest.py` refuses any database
-  endpoint other than 127.0.0.1:5433.
-
-**Frontend** (Vitest with jsdom and a mocked API, so no backend is needed):
-
-    cd frontend && npm ci && npm run lint && npm test && npm run build
-
-**Agent extensions** (Python 3.12; install backend dependencies from
-`backend/requirements.txt` before running the tests):
-
-The agent extension tests cover the guardrail hook, MCP server, custom agent,
-and reusable agent components. The MCP server imports backend modules that
-require OpenTelemetry dependencies.
-
-    python -m unittest discover -s agent-hooks/tests
-    python -m unittest discover -s mcp-server/tests
-    python -m unittest discover -s custom-agent/tests
-    python -m unittest discover -s .agents/tests
-    python custom-agent/release_auditor.py
+- [Backend Test Safety Guard](backend/tests/conftest.py)
+- [Custom Agent Tests](custom-agent/tests/)
 
 
 ## Containerization
@@ -348,7 +316,7 @@ Do not use `docker compose down -v` if you need to preserve existing database re
 
 ## Deployment
 
-CareerPilot's public demonstration environment is designed for deployment on Render. The deployment configuration and release procedures are prepared, but the public demo is not yet operational.
+CareerPilot's public demonstration environment is designed for deployment on Render. The deployment configuration and release procedures are prepared, but the public deployment is **on hold** and the public demo is not operational.
 
 ### Deployment Architecture
 
@@ -406,7 +374,7 @@ It covers:
 
 ### Current Deployment Status
 
-**Status: Blocked — public demo not yet operational.**
+**Status: ON HOLD — public demo not operational.**
 
 The Render resources have been provisioned, but PostgreSQL authentication remains unresolved. An external connection attempt returned:
 
@@ -414,9 +382,17 @@ The Render resources have been provisioned, but PostgreSQL authentication remain
 FATAL: SCRAM channel binding check failed
 ```
 
-A support request has been submitted to Render. Database schema provisioning, SELECT-only role verification, and end-to-end public demonstration testing remain pending.
+The root cause has not been confirmed. A support request has been submitted to Render, and the work is tracked in [Issue #3](https://github.com/robanc/CareerPilot/issues/3), which remains open. The [Claude Code review of Issue #3](https://github.com/robanc/CareerPilot/issues/3#issuecomment-6406935494) compares the prepared implementation with the issue's acceptance criteria.
 
-The public demo must not be treated as ready for release until these checks have passed.
+Not yet completed or verified on Render:
+
+- Database authentication and TLS connection.
+- Schema provisioning and the SELECT-only demo role.
+- Fictional seed data.
+- The GitHub `production` environment approval configuration and deployment secrets.
+- A successful release, the post-deployment smoke tests, and a working public URL.
+
+No database provisioning or deployment will be performed until Render Support confirms that authentication and the role work. The public demo must not be treated as ready for release until these checks have passed.
 
 ### Deployment References
 
@@ -425,6 +401,7 @@ The public demo must not be treated as ready for release until these checks have
 - [Deployment SQL Review Files](deploy/render/)
 - [Deployment Workflow](.github/workflows/deploy.yml)
 - [Deployment Tracking Issue #3](https://github.com/robanc/CareerPilot/issues/3)
+- [Claude Code Review of Issue #3](https://github.com/robanc/CareerPilot/issues/3#issuecomment-6406935494)
 
 
 ## CI/CD
@@ -438,43 +415,49 @@ The [CI workflow](.github/workflows/ci.yml) runs automatically on:
 - Pull requests targeting `main`.
 - Pushes to `main`.
 
-It can also be started manually or called by the deployment workflow.
+It can also be started manually (`workflow_dispatch`) or called by the deployment workflow.
 
 ### CI Pipeline
 
-| Job | Automated Checks |
+| Job (as shown in GitHub Actions) | Automated Checks |
 |---|---|
-| `backend-tests` | Python 3.12, Pytest, PostgreSQL 16 integration tests |
-| `frontend` | Node.js 24, dependency installation, ESLint, Vitest, production build |
-| `agent-extensions` | Guardrail hook, MCP server, custom agent, skill and subagent tests |
-| `docker-build` | Docker Compose configuration validation and frontend/backend image builds |
+| Backend tests (pytest + PostgreSQL 16) | Installs `backend/requirements.txt` on Python 3.12, starts the isolated PostgreSQL 16 test container (`docker-compose.test.yml`, 127.0.0.1:5433), and runs `python -m pytest backend/tests` |
+| Frontend lint and build | `npm ci`, `npm run lint`, `npm test` (Vitest), and `npm run build` on Node.js 24 |
+| Agent extension tests | Guardrail hook, MCP server, custom agent (including the On-Call Investigator and Prometheus alert adapter tests), and skill/subagent checks (`unittest`, Python 3.12) |
+| Monitoring config and alert rule validation | `promtool check config`, `check rules`, and `test rules` from the pinned Prometheus image |
+| Docker image build verification | Validates `docker-compose.yml` and builds the backend and frontend images |
 
-The backend CI job uses an isolated, disposable PostgreSQL test database with fixed test-only credentials.
+The pipeline uses fixed, test-only database credentials, a read-only `GITHUB_TOKEN`, and no repository secrets. It does not push images or deploy.
 
-The workflow has read-only repository permissions and does not publish images or deploy application services.
+### Latest Verified CI Run
+
+[GitHub Actions CI run #30](https://github.com/robanc/CareerPilot/actions/runs/40260769434), on commit `af533c35234c608c31f22ea604743ea88d997e3d`, passed all five jobs:
+
+- Monitoring config and alert rule validation
+- Agent extension tests
+- Docker image build verification
+- Backend tests (pytest + PostgreSQL 16)
+- Frontend lint and build
+
+Historical evidence, superseded by run #30: run #21 passed the four jobs that existed then (commit `3ea8ed6`), and runs #23, #24, #25, and #27 passed all five jobs.
 
 ### Deployment Workflow
 
-The [Deploy workflow](.github/workflows/deploy.yml) provides a controlled release process for Render.
+The [Deploy workflow](.github/workflows/deploy.yml) is the only way to release. It is started by hand and runs four stages in order:
 
-The configured release sequence is:
+1. **guard:** `main` only, with the confirmation text `DEPLOY` typed in.
+2. **verify:** reruns the complete CI workflow on that commit.
+3. **deploy:** waits for approval in the GitHub `production` environment, then triggers the Render deploy hooks for that commit.
+4. **smoke:** refuses to pass until the API and the static site both report the commit being released (`/version`, `/version.json`), then runs read-only safety checks (`ops/smoke-test-render.sh`).
 
-1. **Manual trigger:** Start the workflow from `main` and enter the confirmation text `DEPLOY`.
-2. **CI verification:** Run the complete CI workflow against the selected commit.
-3. **Production approval:** Use the GitHub `production` environment for a required human approval gate, once configured.
-4. **Render deployment:** Trigger backend and frontend deployment hooks for the selected commit.
-5. **Post-deployment verification:** Check that the expected commit is deployed and execute the Render smoke-test script.
-
-Deployment credentials are designed to be stored as protected GitHub environment secrets rather than committed to the repository.
+The approval gate depends on the `production` environment being configured with required reviewers before the first release; that configuration has not been completed or verified. Deploy hook URLs are credentials and are meant to be stored only as `production` environment secrets, never in the repository.
 
 ### Current CI/CD Status
 
-- **Continuous integration:** Operational and verified. GitHub Actions CI run #21 passed all four jobs on commit `3ea8ed6`, including backend tests, frontend checks, agent extension tests, and Docker image build verification.
-- **Manual deployment workflow:** Implemented, but not yet verified through a successful public release.
-- **Automatic development deployment:** Not implemented.
-- **Production deployment:** Pending completion of Render database provisioning and security verification.
-
-The project intentionally requires human approval for production deployment.
+- **Continuous integration:** Operational. Latest verified run: [#30](https://github.com/robanc/CareerPilot/actions/runs/40260769434), all five jobs passed.
+- **Manual deployment workflow:** Implemented, but never run to a successful public release.
+- **Automatic deployment:** Not implemented. The project intentionally requires human approval for production deployment.
+- **Production deployment:** On hold (see [Deployment](#deployment)).
 
 ### Implementation References
 
@@ -483,36 +466,14 @@ The project intentionally requires human approval for production deployment.
 - [Render Smoke Test](ops/smoke-test-render.sh)
 - [Render Deployment Guide](docs/deployment-render.md)
 - [GitHub Actions Runs](https://github.com/robanc/CareerPilot/actions)
-
-### Additional CI/CD Details
-
-GitHub Actions runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on pushes and pull requests to `main`, and on demand via **Run workflow** (`workflow_dispatch`).
-
-| Job | What it checks |
-|---|---|
-| Backend tests | Installs `backend/requirements.txt` on Python 3.12, starts the isolated PostgreSQL 16 test container (`docker-compose.test.yml`, 127.0.0.1:5433), and runs `python -m pytest backend/tests` |
-| Frontend | `npm ci`, `npm run lint`, `npm test` (Vitest), and `npm run build` on Node.js 24 |
-| Agent extensions | Guardrail hook, MCP server, custom agent, and skill/subagent checks (`unittest`, Python 3.12) |
-| Docker build | Validates `docker-compose.yml` and builds the backend and frontend images |
-
-The pipeline uses temporary CI-only database credentials, a read-only `GITHUB_TOKEN`, and no repository secrets. It does not push images or deploy.
-
-[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) is the only way to release. You
-start it by hand, and it runs four stages in order:
-
-1. **guard:** `main` only, with the confirmation `DEPLOY` typed in.
-2. **verify:** reruns all of the CI checks above on that commit.
-3. **deploy:** waits for approval in the `production` environment, then triggers the Render
-   deploy hooks.
-4. **smoke:** refuses to pass until the API and the static site both report the commit being
-   released (`/version`, `/version.json`), then runs read-only safety checks.
+- [Latest Verified CI Run #30](https://github.com/robanc/CareerPilot/actions/runs/40260769434)
 
 
 ## Observability
 
-CareerPilot includes a locally validated observability stack using OpenTelemetry, Prometheus, Grafana, Loki, and Tempo. The implementation provides HTTP request metrics, structured application logs, backend tracing, and correlation identifiers for investigating application performance and errors.
+CareerPilot includes a locally validated observability stack using OpenTelemetry, Prometheus, Grafana, Loki, and Tempo. The implementation provides HTTP request metrics, structured application logs with request and trace identifiers, backend tracing, and four locally evaluated Prometheus alert rules.
 
-The monitoring stack runs separately from the application and PostgreSQL database using `monitoring/docker-compose.yml`. Production observability deployment has not yet been performed.
+The monitoring stack runs separately from the application and PostgreSQL database using `monitoring/docker-compose.yml`. It is local-only: production observability and production alert delivery have not been deployed or verified.
 
 ### Implemented Capabilities
 
@@ -522,12 +483,13 @@ The monitoring stack runs separately from the application and PostgreSQL databas
 | Version identification | `GET /version` identifies the deployed commit when configured |
 | HTTP metrics | Prometheus-compatible request counts and duration metrics |
 | OpenTelemetry | Backend instrumentation and OTLP telemetry export |
-| Distributed tracing | Tempo stores backend HTTP and resume-matching spans |
+| Backend tracing | Tempo stores backend `http.request` and `resume.match` spans |
 | Structured logging | JSON HTTP logs include request and trace identifiers without request-body contents |
 | Centralized visualization | Grafana provides access to Prometheus metrics, Loki logs, and Tempo traces |
-| Trace correlation | Request and trace identifiers support investigation across telemetry sources |
+| Log–trace correlation | Backend HTTP logs carry the `trace_id` of their trace; matching IDs were checked locally with synthetic requests (see [Monitoring Documentation](monitoring/README.md)) |
+| Alert rules | Four local Prometheus rules with synthetic `promtool` tests (see [Alerting on User Impact](#alerting-on-user-impact)) |
 | Automated validation | 10 observability tests passed locally |
-| CI verification | GitHub Actions CI run #25 passed all five jobs, including monitoring configuration and alert rule validation |
+| CI verification | [GitHub Actions CI run #30](https://github.com/robanc/CareerPilot/actions/runs/40260769434) passed all five jobs, including monitoring configuration and alert rule validation |
 
 ### Local Monitoring Setup
 
@@ -553,7 +515,8 @@ For detailed setup, telemetry queries, validation, and troubleshooting, see [Mon
 ### Current Limitations
 
 - The monitoring stack has been validated locally but has not been deployed to production.
-- End-to-end tracing across frontend, backend, and database operations has not been verified.
+- Correlation has been checked only between backend logs and backend traces. End-to-end tracing and correlation across frontend, backend, and database operations have not been verified.
+- Production alert delivery is not configured: there is no Alertmanager, notification channel, or production alerting.
 - Business-level metrics for all job application workflows have not been verified.
 - Local Prometheus alert rules and a manual incident response runbook are in place; see [Alerting on User Impact](#alerting-on-user-impact). No alert notifications are configured, and AI-assisted incident response is not implemented (see [On-Call Agent](#on-call-agent)).
 
@@ -601,7 +564,7 @@ Firing alerts are visible at http://127.0.0.1:9090/alerts and through Grafana. `
 
 - **Synthetic rule tests:** `promtool test rules` runs 9 test cases on synthetic time series, with no running services or database. The tests check that each alert fires after its `for` duration and stays inactive below its threshold.
 - **Local validation:** `promtool check config`, `check rules`, and `test rules` passed locally.
-- **GitHub Actions:** the `monitoring-config` CI job runs the same three `promtool` checks. CI runs #23, #24, and #25 each passed all five jobs, including `monitoring-config`.
+- **GitHub Actions:** the "Monitoring config and alert rule validation" CI job runs the same three `promtool` checks. It passed in the latest verified [CI run #30](https://github.com/robanc/CareerPilot/actions/runs/40260769434); historical runs #23, #24, and #25 also passed all five jobs.
 
 ### Incident Response
 
@@ -618,7 +581,7 @@ Restarts and remediation require developer approval.
 
 - **No Alertmanager or notifications:** alerts must be checked manually, and no operator is notified.
 - **No production alerting:** the alerts cover the local monitoring stack only, not the Render deployment.
-- **Not verified live:** alert firing has been verified with synthetic `promtool` tests only, not against a running stack.
+- **Limited live verification:** alert logic is verified with synthetic `promtool` tests. On the running local stack, only `CareerPilotBackendTelemetryMissing` has been observed firing, once, through the read-only Prometheus alert adapter on October 26, 2026 (UTC). The other three alerts have not been observed firing live.
 - **No external uptime monitoring.**
 
 Potential future improvements include external uptime monitoring, notifications to a designated operator, and production alerting.
@@ -702,7 +665,7 @@ Exit code `0` means a report was produced; `2` means the input was rejected. `--
 
 - 32 of 32 investigator tests and 38 of 38 custom-agent tests passed locally. The tests use synthetic input only.
 - The investigator was committed as `ae8a0ab`.
-- GitHub Actions CI run #27 passed all five jobs.
+- Historical: GitHub Actions CI run #27 passed all five jobs after that commit. The investigator tests remain part of the "Agent extension tests" CI job, which passed in the latest verified [run #30](https://github.com/robanc/CareerPilot/actions/runs/40260769434).
 
 ### Prometheus Alert Adapter
 
@@ -720,7 +683,17 @@ python custom-agent/prometheus_alert_adapter.py --connect
 - **Separate from the investigator:** the snapshot is not passed to the On-Call Investigator, which accepts synthetic evidence only and rejects live snapshots.
 - **No other access:** no database, Docker, shell, file writes, or remediation.
 
-**Verification:** 21 of 21 adapter tests passed, using mocked HTTP responses only, and the full custom-agent suite passed 59 of 59. On October 26, 2026 (UTC), a live read-only query of the local Prometheus returned one firing `CareerPilotBackendTelemetryMissing` (info) alert.
+**Verification:** 21 of 21 adapter tests passed, using mocked HTTP responses only, and the full custom-agent suite passed 59 of 59. On October 26, 2026 (UTC), a live read-only query of the local Prometheus returned one firing `CareerPilotBackendTelemetryMissing` (info) alert. That alert was not diagnosed; a stopped local backend is a plausible explanation, not a confirmed cause.
+
+The adapter is not an automated agent: it runs only when a developer passes `--connect`, it is not triggered by alerts, and it fixes nothing.
+
+### Rubric Status
+
+Credit for the capstone's on-call agent criterion is **not claimed**. CareerPilot does not provide an agent that an alert activates and that investigates and fixes user-impacting failures:
+
+- the On-Call Investigator is synthetic-only, deterministic, read-only, and non-remediating;
+- the Prometheus alert adapter is a read-only, opt-in snapshot tool, not an alert-triggered or fixing agent;
+- the two are deliberately not connected.
 
 ### Current Limitations
 
@@ -876,10 +849,11 @@ For detailed setup, verification commands, and example queries, see [Monitoring 
 
 ### Known Limitations
 
-- CareerPilot does not provide user authentication. Use fictional data only.
+- CareerPilot does not provide user authentication. Use synthetic or fictional data only, for tests, demonstrations, and the public demo.
+- Do not inspect or alter existing development database records when reproducing or testing; backend tests use only the isolated test database.
 - The Resume Library is available in local mode but disabled in public demonstration mode.
 - Resume matching is deterministic and keyword-based; its score is not an assessment of candidate suitability.
-- The Render public demo remains blocked by PostgreSQL authentication and security provisioning requirements.
+- The Render public demo is on hold: an external PostgreSQL connection fails with a SCRAM channel-binding error whose root cause is unconfirmed (see [Deployment](#deployment)).
 - Production deployment is not necessary to reproduce the local application or run the automated tests.
 
 ### Reproducibility References
@@ -938,28 +912,19 @@ verification instructions.
 
 ## Local setup
 
-Requirements: Docker Desktop, Python 3.12, and Node.js 24.
+The complete local setup (prerequisites, the git-ignored `.env` file, `docker compose up --build --detach`, verification, and tests) is in [Reproducibility](#reproducibility). All ports are bound to 127.0.0.1 only.
 
-1. Create a `.env` file in the repository root (it is git-ignored) with `POSTGRES_USER`,
-   `POSTGRES_PASSWORD`, and `POSTGRES_DB` for your local development database. Never commit
-   it, and use only fictional data.
-2. Start the full stack:
+To run the frontend dev server against the Docker backend instead of the nginx container:
 
-       docker compose up --build --detach
-
-   - Frontend: http://127.0.0.1:8080
-   - API: http://127.0.0.1:8002 (for example `/health`)
-
-   All ports are bound to 127.0.0.1 only.
-3. To run the frontend dev server against that backend instead:
-
-       cd frontend && npm ci && VITE_API_URL=http://127.0.0.1:8002 npm run dev
+    cd frontend && npm ci && VITE_API_URL=http://127.0.0.1:8002 npm run dev
 
 
 ## Security and data handling
 
-- **Fictional data only:** the MVP has no authentication. Use fictional data everywhere; the
-  public demo shows only the fictional seed (`backend/scripts/seed_demo_data.py`).
+- **Synthetic and fictional data only:** the MVP has no authentication. Tests, demonstrations,
+  and the public demo must use synthetic or fictional data; the public demo shows only the
+  fictional seed (`backend/scripts/seed_demo_data.py`). Do not inspect or alter existing
+  development database records.
 - **Resume privacy:** pasted resume text and job descriptions submitted for
   matching are not stored or logged by the matching feature. Saved resumes
   in the local-only Resume Library are intentionally persisted in PostgreSQL.

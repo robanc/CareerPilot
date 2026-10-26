@@ -1,8 +1,42 @@
 # Deploying the CareerPilot public demo to Render
 
-Status: **prepared, not deployed. `public_demo` is NOT SAFE TO DEPLOY** until
-every step below has been approved, completed, and verified. Nothing in this
-guide has been run yet.
+Status: **ON HOLD — prepared, not deployed. `public_demo` is NOT SAFE TO DEPLOY**
+until every step below has been approved, completed, and verified. The
+procedure below has not been completed; see "Current status".
+
+## Current status (ON HOLD)
+
+Public deployment is **on hold**. An external connection to the Render
+PostgreSQL database failed during authentication with:
+
+    FATAL: SCRAM channel binding check failed
+
+- **Root cause:** unconfirmed.
+- **Render Support:** a support request has been submitted; confirmation is
+  pending.
+- **Tracking:** [GitHub Issue #3](https://github.com/robanc/CareerPilot/issues/3),
+  which is open. The
+  [Claude Code review of Issue #3](https://github.com/robanc/CareerPilot/issues/3#issuecomment-6406935494)
+  compares this preparation with the issue's acceptance criteria.
+
+No further database provisioning or deployment step is to be performed
+until Render Support confirms that authentication and the role work.
+
+State of each procedure step. "Reported" means recorded in the project
+documentation, not independently verified in this guide.
+
+| Step | State |
+|---|---|
+| 1. Merge to `main` | The Blueprint (`render.yaml`) and this guide are on `main`. |
+| 2. Create Render resources | Reported as provisioned (`README.md`, Deployment). The API host in `render.yaml` is consistent with that. Not independently verified here. |
+| 3. Read-only capability check | **Blocked.** The external connection failed at authentication, so the capability query has not returned results. Superuser, CREATEROLE, database owner, and TLS remain unverified. |
+| 4. Stage the SQL | Not executed. |
+| 5. Schema and SELECT-only role | Not executed. Schema provisioning and SELECT-only role verification are pending. |
+| 6. Reader password | Not executed. |
+| 7. Fictional seed data | Not executed. |
+| 8. Close the database | Pending. If a `/32` was added to the allowlist for the failed connection attempt, confirm it has been removed. |
+| 9. API and release workflow configuration | Not completed or verified. This includes `CAREERPILOT_DEMO_DATABASE_URL`, the GitHub `production` environment approval configuration, the deploy hook secrets, and the URL variables. |
+| 10. Release and smoke tests | Not executed. No successful deployment, no public smoke test, and no working public URL. |
 
 ## Architecture
 
@@ -101,6 +135,10 @@ Every step marked **[approval]** needs your explicit go-ahead at the time.
      confirmed", with all write actions hidden.
 
 3. **[approval] Read-only capability check.**
+   - **Current state:** blocked. The external connection failed with
+     `FATAL: SCRAM channel binding check failed` (see "Current status").
+     Do not continue past this step until Render Support confirms
+     authentication and the role.
    - In the database's Networking settings, temporarily add your own
      public IP as a `/32` to the allowlist.
    - Connect with the *external* owner URL (TLS is enforced by Render).

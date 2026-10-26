@@ -1635,3 +1635,108 @@ This documents actual agent participation in the public task tracker. Earlier de
 ### Outcome
 
 The public task tracker now contains documented evidence of an AI agent reviewing Issue #3 against its acceptance criteria. The issue remains open and blocked pending Render Support confirmation.
+
+## Entry 017 — README Final Submission Readiness
+
+**Date:** October 25, 2026
+**AI Coding Agent:** Claude Code (Claude Opus 5.5)
+**Development Method:** Human-supervised, agent-assisted documentation update
+**Status:** Edited, not committed. Documentation only; no tests were run. Render deployment remains **on hold**.
+
+### Objective
+
+Make `README.md` accurately reflect the completed work for final capstone submission:
+
+- current CI evidence;
+- the Issue #3 review;
+- the on-hold deployment;
+- the real extent of observability and on-call capabilities;
+- less duplication.
+
+### Task and Prompt (summarized)
+
+The developer asked Claude Code to update only `README.md` and this log:
+
+1. Make GitHub Actions run #30 the headline CI evidence, keeping older runs only as labelled historical evidence.
+2. Link the Claude Code review of Issue #3, without claiming the issue is closed.
+3. State that the Render deployment is on hold because of the unresolved SCRAM channel-binding failure, with the root cause unconfirmed, and without claiming a working deployment or completed production approval configuration.
+4. Distinguish implemented observability from unverified end-to-end correlation and production alert delivery.
+5. Describe the On-Call Investigator and the Prometheus alert adapter accurately, without claiming on-call rubric credit.
+6. Reduce duplication in the testing, CI/CD, and local setup sections without losing commands, safeguards, or evidence.
+7. State that synthetic or fictional data is required, and that development database records must not be inspected or altered.
+8. Preserve all rubric sections and links.
+9. Record the work here.
+
+Database, Docker, deployment, network, staging, commit, and push operations were prohibited.
+
+### Context Reviewed
+
+- `AGENTS.md`, `product-spec.md`, `README.md`, and this log (Entries 013–016).
+- `.github/workflows/ci.yml` (job names) and `.github/workflows/deploy.yml`.
+- Already reviewed in this session: `docs/deployment-render.md`, `render.yaml`, `monitoring/README.md`, `monitoring/alerts/careerpilot.rules.yml`, `backend/tests/test_observability.py`, and the custom-agent sources.
+
+### Files Changed
+
+`README.md`:
+
+- **Product Specification:** Issue #3 marked "on hold", with a link to the review comment (`#issuecomment-6406935494`).
+- **Agent Team Specification:** an On-Call Investigator row added to the roles table.
+- **Expected Behavior and Application:** the public demo described as on hold. The duplicated address list in Application was replaced with a link to Local Service Addresses.
+- **Testing:**
+  - the "Additional Testing Details" duplicate merged into the backend, frontend, and new agent-extension subsections, keeping every command, the runner's safeguards, and the `conftest.py` guard;
+  - the Observability tests row corrected: those tests do not cover trace correlation;
+  - rows added for agent extension and alert rule tests;
+  - a synthetic-data rule added to Testing Safety.
+- **Deployment:** status "ON HOLD"; root cause unconfirmed; the Issue #3 review linked; a list of what is not completed or verified, including the `production` approval configuration.
+- **CI/CD:**
+  - one five-job table using the job names from `ci.yml`;
+  - a "Latest Verified CI Run" subsection for run #30, with older runs labelled historical;
+  - one deploy-stage list;
+  - the duplicated "Additional CI/CD Details" removed;
+  - the status updated to on hold.
+- **Observability:** "Distributed tracing" became "Backend tracing"; log–trace correlation limited to the backend checks done locally; an alert-rules row added; run #30 as CI evidence; limitations added for end-to-end correlation and production alert delivery.
+- **Alerting on User Impact:** run #30 as current CI evidence, with #23–#25 as historical. "Not verified live" became "Limited live verification": only `CareerPilotBackendTelemetryMissing` has been observed firing live (Entry 015).
+- **On-Call Agent:** run #27 labelled historical; the adapter described as not an automated, alert-triggered, or fixing agent; the live alert noted as undiagnosed; a "Rubric Status" subsection added that does not claim on-call credit.
+- **Reproducibility, Local setup, and Security:**
+  - Known Limitations updated for the on-hold deployment and synthetic-data rules;
+  - Local setup reduced to a pointer to Reproducibility plus the frontend dev-server command, which appears nowhere else;
+  - the Security data rule extended.
+
+`docs/deployment-render.md` (follow-up request, scoped to that file only):
+
+- The status line now reads "ON HOLD". The `NOT SAFE TO DEPLOY` marker is preserved word for word; the release auditor's deployment-gate check looks for it.
+- A new "Current status (ON HOLD)" section documents the unresolved `FATAL: SCRAM channel binding check failed` error, the unconfirmed root cause, and the pending Render Support confirmation, and links Issue #3 and the Claude Code review.
+- A step-by-step table separates resources *reported* as provisioned from steps that were not executed or verified: schema, SELECT-only role, fictional seed, `production` approval configuration, deployment, and public smoke test.
+- Release step 3 is marked as blocked.
+- All procedures, commands, security requirements, and approval gates are unchanged.
+
+`docs/ai-development-log.md`: this entry.
+
+### Review and Verification
+
+- **Not run:** no tests, Docker, database, deployment, or network operations.
+- **CI run #30** (`https://github.com/robanc/CareerPilot/actions/runs/40260769434`, commit `af533c35234c608c31f22ea604743ea88d997e3d`, all five jobs passed) is recorded as verified by the developer. Claude Code did not query GitHub Actions.
+- **Job names** in the README were checked against `.github/workflows/ci.yml`.
+- **Links:** every relative link in `README.md` was checked for an existing target, and every in-page anchor for an existing heading.
+- **Structure:** all 13 table-of-contents sections remain.
+- **Read-only checks:** `git diff --check`, `git diff -- README.md docs/ai-development-log.md`, `git diff -- docs/deployment-render.md`, and `git status --short`. The guide still contains the `NOT SAFE TO DEPLOY` marker exactly once.
+- **Developer review:** pending.
+
+### Limitations
+
+- The README's "Render resources have been provisioned" statement is carried over from the existing text. It was not independently verified.
+- `docs/deployment-render.md` and `README.md` now agree on the on-hold status. The guide's "reported" provisioning comes from the README and was not independently verified. The release auditor was not rerun to confirm that its marker check still passes.
+- Historical run results (#21, #23–#25, #27) come from earlier developer reports.
+- The README's test counts (10 observability, 32 investigator, 21 adapter, 59 custom-agent) are from earlier entries and were not rerun.
+
+### Safety
+
+- No database was accessed.
+- The protected backups, `.env`, secrets, and credentials were not touched.
+- No containers were changed and nothing was deployed.
+- No application code, configuration, workflows, or tests were changed.
+- Nothing was staged, committed, or pushed.
+
+### Outcome
+
+The README now presents run #30 as the current CI evidence, links the Issue #3 review, marks the public deployment as on hold with the root cause unconfirmed, separates verified local observability from unverified end-to-end correlation and production alerting, and states plainly that on-call rubric credit is not claimed. Duplicated testing, CI/CD, and setup content was merged without dropping commands, safeguards, or evidence.

@@ -1574,3 +1574,64 @@ Add a separate, read-only adapter that takes a sanitized snapshot of the CareerP
 ### Outcome
 
 CareerPilot has a read-only, opt-in Prometheus alert adapter. It produces sanitized live alert snapshots from the fixed local endpoint, tested with 21 mocked-HTTP tests (59 of 59 across the custom-agent suite), and it worked once against the live local Prometheus. It stays separate from the synthetic-only investigator and makes no health, root-cause, or recovery claims.
+
+---
+
+## Entry 016 — GitHub Issue #3 Agent Review
+
+**Date:** October 25, 2026
+**AI Coding Agent:** Claude Code
+**Development Method:** Human-supervised, agent-assisted review
+**Status:** Completed — read-only review; deployment remains blocked.
+
+### Objective
+
+Review public GitHub Issue #3 against CareerPilot's existing implementation and its 11 deployment acceptance criteria.
+
+Issue: https://github.com/robanc/CareerPilot/issues/3
+
+### Task and Agent Instructions
+
+The developer directed Claude Code to review the issue, product specification, deployment documentation, configuration, backend safeguards, and existing test evidence.
+
+The review was explicitly read-only. Database access, credential changes, file modifications, container operations, and deployment actions were prohibited.
+
+### Context Reviewed
+
+- `product-spec.md`
+- `docs/deployment-render.md`
+- `render.yaml`
+- `.github/workflows/deploy.yml`
+- Relevant backend safeguards and tests
+- Public GitHub Issue #3
+
+### Findings
+
+- None of the 11 acceptance criteria could be confirmed as completed in the actual Render environment.
+- Public-demo operating mode, read-only safeguards, database permission checks, fictional-data seeding, and deployment smoke tests are implemented or prepared.
+- Render PostgreSQL authentication remains blocked by the reported SCRAM channel-binding failure.
+- The deployment guide and README contain status inconsistencies.
+- The README's CI information needs updating to reflect the five-job pipeline.
+
+### Verification and Human Oversight
+
+Claude Code fetched and reviewed the public issue and inspected repository files. No tests were executed during this review.
+
+The developer reviewed the findings and published a factual summary as a comment on Issue #3:
+
+https://github.com/robanc/CareerPilot/issues/3#issuecomment-6406935494
+
+This documents actual agent participation in the public task tracker. Earlier deployment work is not retroactively attributed to Issue #3.
+
+### Safety and Limitations
+
+- No PostgreSQL access or modifications.
+- No protected backup modifications.
+- No credential or environment-variable changes.
+- No container or Render deployment operations.
+- No source-code changes during the agent review.
+- Root cause of the SCRAM authentication failure remains unconfirmed.
+
+### Outcome
+
+The public task tracker now contains documented evidence of an AI agent reviewing Issue #3 against its acceptance criteria. The issue remains open and blocked pending Render Support confirmation.

@@ -1746,7 +1746,7 @@ The README now presents run #30 as the current CI evidence, links the Issue #3 r
 **Date:** October 26, 2026
 **AI Coding Agent:** Claude Code (Claude Opus 5.5)
 **Development Method:** Human-supervised, agent-assisted implementation
-**Status:** Implemented, not committed. Local offline tests: 90 custom-agent tests, 87 passed and 3 skipped (symlink tests; see below). No CI run yet. Render deployment remains **on hold**.
+**Status:** Committed as `54ea857` (`54ea8571d90363f86fdd2ebd20b2f30c29e96376`). Developer-verified GitHub Actions CI run #32 passed all five jobs; its Linux custom-agent suite reported "Ran 90 tests" and "OK", with no skipped tests (see the [CI workflow runs](https://github.com/robanc/CareerPilot/actions/workflows/ci.yml)). Locally on Windows: 87 passed and 3 skipped (symlink tests; see below). Render deployment remains **on hold**.
 
 ### Objective
 
@@ -1829,30 +1829,36 @@ Implement the plan from Claude Code's read-only feasibility review: an on-call a
   - the repair runs only after the fault condition is observed;
   - root cause is reported as established only when the original config had `fault_5xx: true` and verification passed;
   - `otlp_export` is reported as `disabled` (the sandbox exports no telemetry) only for resolved incidents, so an open 5xx incident is not flagged as inconsistent.
-- **Developer review:** pending.
+- **Developer review:** completed. The developer committed and pushed `54ea857` and verified CI run #32.
 
 ### Tests Executed (local, offline)
 
-- `python -m unittest discover -s custom-agent/tests -p "test_oncall_responder.py"`: 30 tests, 27 passed, **3 skipped**. The three symlink-refusal tests skip because this Windows account cannot create symlinks; they are unverified locally and are expected to run on Linux CI.
+- `python -m unittest discover -s custom-agent/tests -p "test_oncall_responder.py"`: 30 tests, 27 passed, **3 skipped**. The three symlink-refusal tests skip because this Windows account cannot create symlinks. They ran and passed on Linux in CI run #32 (see below).
 - `python -m unittest discover -s custom-agent/tests`: **90 tests, 87 passed, 3 skipped** (the same three).
 - `python -m unittest discover -s custom-agent/tests -p "test_oncall_investigator.py"`: 33 of 33 passed.
 - The `--demo` CLI was exercised only through the tests, including one subprocess run.
 - `git diff --check`: clean.
-- Not run: backend tests, frontend checks, CI, or any live service.
+- Not run locally: backend tests, frontend checks, or any live service.
+
+### GitHub Actions (verified by the developer)
+
+- CI run #32, on commit `54ea8571d90363f86fdd2ebd20b2f30c29e96376`, passed all five jobs.
+- Its Linux custom-agent log reported "Ran 90 tests" and "OK", with no skipped tests. All three symlink-refusal tests ran and passed.
+- No run-specific URL is recorded; the [CI workflow runs](https://github.com/robanc/CareerPilot/actions/workflows/ci.yml) page lists the run.
 
 ### Safety
 
 - No PostgreSQL access, and no access to the protected backups, `.env`, secrets, or credentials.
 - No Docker, Render, live services, or network.
 - All test sandboxes were created under the system temp directory and removed afterwards.
-- Nothing was staged, committed, or pushed.
+- Claude Code did not stage, commit, or push; the developer did.
 
 ### Limitations
 
 - **Synthetic only.** The responder is woken by synthetic spool events, not by real Prometheus alerts (no Alertmanager or webhook is configured). It repairs only a disposable sandbox, never the CareerPilot application or any live service.
 - **One repairable alert.** The other three alerts are report-only.
 - **Rubric credit is not guaranteed.** The README describes the on-call criterion as only partially addressed, with synthetic fixtures.
-- **Unverified locally:** the symlink-refusal tests. The responder tests have not yet run in CI.
+- **Symlink-refusal tests:** they skip locally on Windows without symlink support, but ran and passed on Linux in CI run #32.
 - **The audit log is not tamper-proof.** It is append-only by convention only.
 
 ### Outcome

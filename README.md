@@ -424,7 +424,7 @@ It can also be started manually (`workflow_dispatch`) or called by the deploymen
 |---|---|
 | Backend tests (pytest + PostgreSQL 16) | Installs `backend/requirements.txt` on Python 3.12, starts the isolated PostgreSQL 16 test container (`docker-compose.test.yml`, 127.0.0.1:5433), and runs `python -m pytest backend/tests` |
 | Frontend lint and build | `npm ci`, `npm run lint`, `npm test` (Vitest), and `npm run build` on Node.js 24 |
-| Agent extension tests | Guardrail hook, MCP server, custom agent (including the On-Call Investigator, Prometheus alert adapter, and On-Call Responder tests; the responder tests were added after run #30), and skill/subagent checks (`unittest`, Python 3.12) |
+| Agent extension tests | Guardrail hook, MCP server, custom agent (including the On-Call Investigator, Prometheus alert adapter, and On-Call Responder tests), and skill/subagent checks (`unittest`, Python 3.12) |
 | Monitoring config and alert rule validation | `promtool check config`, `check rules`, and `test rules` from the pinned Prometheus image |
 | Docker image build verification | Validates `docker-compose.yml` and builds the backend and frontend images |
 
@@ -432,7 +432,7 @@ The pipeline uses fixed, test-only database credentials, a read-only `GITHUB_TOK
 
 ### Latest Verified CI Run
 
-[GitHub Actions CI run #30](https://github.com/robanc/CareerPilot/actions/runs/40260769434), on commit `af533c35234c608c31f22ea604743ea88d997e3d`, passed all five jobs:
+GitHub Actions CI run #32, on commit `54ea8571d90363f86fdd2ebd20b2f30c29e96376`, passed all five jobs (see the [CI workflow runs](https://github.com/robanc/CareerPilot/actions/workflows/ci.yml)):
 
 - Monitoring config and alert rule validation
 - Agent extension tests
@@ -440,7 +440,9 @@ The pipeline uses fixed, test-only database credentials, a read-only `GITHUB_TOK
 - Backend tests (pytest + PostgreSQL 16)
 - Frontend lint and build
 
-Historical evidence, superseded by run #30: run #21 passed the four jobs that existed then (commit `3ea8ed6`), and runs #23, #24, #25, and #27 passed all five jobs.
+In that run, the Linux custom-agent suite reported "Ran 90 tests" and "OK", with no skipped tests.
+
+Historical evidence, superseded by run #32: run #21 passed the four jobs that existed then (commit `3ea8ed6`), and runs #23, #24, #25, #27, and [#30](https://github.com/robanc/CareerPilot/actions/runs/40260769434) (commit `af533c3`) passed all five jobs.
 
 ### Deployment Workflow
 
@@ -455,7 +457,7 @@ The approval gate depends on the `production` environment being configured with 
 
 ### Current CI/CD Status
 
-- **Continuous integration:** Operational. Latest verified run: [#30](https://github.com/robanc/CareerPilot/actions/runs/40260769434), all five jobs passed.
+- **Continuous integration:** Operational. Latest verified run: #32, all five jobs passed (see the [CI workflow runs](https://github.com/robanc/CareerPilot/actions/workflows/ci.yml)).
 - **Manual deployment workflow:** Implemented, but never run to a successful public release.
 - **Automatic deployment:** Not implemented. The project intentionally requires human approval for production deployment.
 - **Production deployment:** On hold (see [Deployment](#deployment)).
@@ -467,7 +469,7 @@ The approval gate depends on the `production` environment being configured with 
 - [Render Smoke Test](ops/smoke-test-render.sh)
 - [Render Deployment Guide](docs/deployment-render.md)
 - [GitHub Actions Runs](https://github.com/robanc/CareerPilot/actions)
-- [Latest Verified CI Run #30](https://github.com/robanc/CareerPilot/actions/runs/40260769434)
+- [CI Workflow Runs (latest verified: #32)](https://github.com/robanc/CareerPilot/actions/workflows/ci.yml)
 
 
 ## Observability
@@ -490,7 +492,7 @@ The monitoring stack runs separately from the application and PostgreSQL databas
 | Log–trace correlation | Backend HTTP logs carry the `trace_id` of their trace; matching IDs were checked locally with synthetic requests (see [Monitoring Documentation](monitoring/README.md)) |
 | Alert rules | Four local Prometheus rules with synthetic `promtool` tests (see [Alerting on User Impact](#alerting-on-user-impact)) |
 | Automated validation | 10 observability tests passed locally |
-| CI verification | [GitHub Actions CI run #30](https://github.com/robanc/CareerPilot/actions/runs/40260769434) passed all five jobs, including monitoring configuration and alert rule validation |
+| CI verification | GitHub Actions CI run #32 passed all five jobs, including monitoring configuration and alert rule validation (see the [CI workflow runs](https://github.com/robanc/CareerPilot/actions/workflows/ci.yml)) |
 
 ### Local Monitoring Setup
 
@@ -565,7 +567,7 @@ Firing alerts are visible at http://127.0.0.1:9090/alerts and through Grafana. `
 
 - **Synthetic rule tests:** `promtool test rules` runs 9 test cases on synthetic time series, with no running services or database. The tests check that each alert fires after its `for` duration and stays inactive below its threshold.
 - **Local validation:** `promtool check config`, `check rules`, and `test rules` passed locally.
-- **GitHub Actions:** the "Monitoring config and alert rule validation" CI job runs the same three `promtool` checks. It passed in the latest verified [CI run #30](https://github.com/robanc/CareerPilot/actions/runs/40260769434); historical runs #23, #24, and #25 also passed all five jobs.
+- **GitHub Actions:** the "Monitoring config and alert rule validation" CI job runs the same three `promtool` checks. It passed in the latest verified CI run #32 (see the [CI workflow runs](https://github.com/robanc/CareerPilot/actions/workflows/ci.yml)); historical runs #23, #24, #25, and #30 also passed all five jobs.
 
 ### Incident Response
 
@@ -665,9 +667,8 @@ Exit code `0` means a report was produced; `2` means the input was rejected. `--
 
 **Verification:**
 
-- 32 of 32 investigator tests and 38 of 38 custom-agent tests passed locally. The tests use synthetic input only.
-- The investigator was committed as `ae8a0ab`.
-- Historical: GitHub Actions CI run #27 passed all five jobs after that commit. The investigator tests remain part of the "Agent extension tests" CI job, which passed in the latest verified [run #30](https://github.com/robanc/CareerPilot/actions/runs/40260769434).
+- Historical: at commit `ae8a0ab`, 32 of 32 investigator tests and 38 of 38 custom-agent tests passed locally, and GitHub Actions CI run #27 passed all five jobs. The tests use synthetic input only.
+- Current: the investigator now has 33 tests, part of the 90-test custom-agent suite that passed in the "Agent extension tests" job of CI run #32 (see the [CI workflow runs](https://github.com/robanc/CareerPilot/actions/workflows/ci.yml)).
 
 ### Prometheus Alert Adapter
 
@@ -685,7 +686,7 @@ python custom-agent/prometheus_alert_adapter.py --connect
 - **Separate from the investigator:** the snapshot is not passed to the On-Call Investigator, which accepts synthetic evidence only and rejects live snapshots.
 - **No other access:** no database, Docker, shell, file writes, or remediation.
 
-**Verification:** 21 of 21 adapter tests passed, using mocked HTTP responses only, and the full custom-agent suite passed 59 of 59. On October 26, 2026 (UTC), a live read-only query of the local Prometheus returned one firing `CareerPilotBackendTelemetryMissing` (info) alert. That alert was not diagnosed; a stopped local backend is a plausible explanation, not a confirmed cause.
+**Verification:** 21 of 21 adapter tests passed, using mocked HTTP responses only. Historically, the full custom-agent suite passed 59 of 59 at the time; the adapter tests are now part of the 90-test suite that passed in CI run #32. On October 26, 2026 (UTC), a live read-only query of the local Prometheus returned one firing `CareerPilotBackendTelemetryMissing` (info) alert. That alert was not diagnosed; a stopped local backend is a plausible explanation, not a confirmed cause.
 
 The adapter is not an automated agent: it runs only when a developer passes `--connect`, it is not triggered by alerts, and it fixes nothing.
 
@@ -712,7 +713,7 @@ python custom-agent/oncall_responder.py --sandbox DIR --watch --interval 5 --max
 
 Exit code `0` means no incident was left open, `1` that one was, and `2` that the sandbox or arguments were refused.
 
-**Verification:** the responder tests (30, of which 3 symlink-refusal tests skip on systems that cannot create symlinks) and the full custom-agent suite (90 tests, 3 skipped) passed locally, offline. They have not yet run in CI.
+**Verification:** in GitHub Actions CI run #32 (commit `54ea857`; see the [CI workflow runs](https://github.com/robanc/CareerPilot/actions/workflows/ci.yml)), the Linux custom-agent suite reported "Ran 90 tests" and "OK", with no skipped tests. That includes the 30 responder tests and their 3 symlink-refusal tests. Locally on Windows, 87 passed and the 3 symlink tests were skipped, because that account cannot create symlinks.
 
 ### Rubric Status
 

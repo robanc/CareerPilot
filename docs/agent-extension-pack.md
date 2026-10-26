@@ -1,9 +1,13 @@
 # Agent extension pack
 
-Status: **implemented and tested.** The original pack was tested locally on
-2026-10-20 (53 unittest tests passed), and the "Agent extension tests" CI
-job now runs the extension tests; the latest verified CI run is #30. The
-on-call responder (added 2026-10-26) has so far been tested locally only.
+Status: **implemented and tested.** The "Agent extension tests" CI job runs
+the extension tests. In the latest verified CI run, #32 (commit
+`54ea8571d90363f86fdd2ebd20b2f30c29e96376`; see the
+[CI workflow runs](https://github.com/robanc/CareerPilot/actions/workflows/ci.yml)),
+all five jobs passed. Its Linux custom-agent suite reported "Ran 90 tests"
+and "OK", with no skipped tests, including the on-call responder and its
+symlink-refusal tests. Historical: the original pack was tested locally on
+2026-10-20 (53 unittest tests passed).
 
 The pack covers what `product-spec.md` (section 7, "Agent Extensions")
 requires, at the locations `AGENTS.md` names. Every component uses only the
@@ -64,5 +68,6 @@ is the Prometheus alert adapter's opt-in, read-only GET to
   CareerPilot application or any real service. Real-service remediation
   still needs developer approval (`docs/permissions.md`).
 - **Symlink-refusal tests need symlink support.** They skip on systems that
-  cannot create symlinks, such as Windows without Developer Mode.
+  cannot create symlinks, such as Windows without Developer Mode. They ran
+  and passed on Linux in CI run #32.
 - **`Read(./.env.*)`** would also deny a future `.env.example`.

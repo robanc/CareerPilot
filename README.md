@@ -891,6 +891,7 @@ For detailed setup, verification commands, and example queries, see [Monitoring 
 
 ### Reproducibility References
 
+- [Fictional Sample Test Data](docs/sample-test-data.md)
 - [Product Specification](product-spec.md)
 - [Local Docker Compose Configuration](docker-compose.yml)
 - [Isolated Test Database Configuration](docker-compose.test.yml)

@@ -807,6 +807,8 @@ The local database uses a persistent Docker volume, so application records survi
 
 Open the frontend in a browser and test the following workflows:
 
+**Sample test data:** Use the [Fictional Sample Test Data](docs/sample-test-data.md) to test the workflows below without entering real personal information.
+
 1. Create a job application using fictional information.
 2. View the application in the list and dashboard.
 3. Edit its status and verify the dashboard updates.

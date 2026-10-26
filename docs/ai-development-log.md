@@ -1461,3 +1461,116 @@ It reads only the evidence file the developer names. It writes only an explicitl
 ### Outcome
 
 CareerPilot now has a deterministic, read-only On-Call Investigator. It turns synthetic evidence for its four local Prometheus alerts into runbook-style incident reports, prioritizing Collector outages and separating expected missing telemetry from incidents. It is tested locally (32 of 32) and in CI (run #27). It does not read live telemetry, is not triggered by alerts, and does not remediate.
+
+## Entry 015 — Read-Only Prometheus Alert Adapter
+
+**Date:** October 26, 2026 (UTC)
+**AI Coding Agent:** Claude Code (Claude Opus 5.5)
+**Development Method:** Human-supervised, agent-assisted implementation
+**Status:** Implemented, not committed. Adapter tests: 21 of 21 passed; full custom-agent suite: 59 of 59 passed. Both used mocked HTTP only. A live read-only query of the local Prometheus succeeded on October 26, 2026 (UTC). No CI run yet. Render deployment remains **on hold**.
+
+### Objective
+
+Add a separate, read-only adapter that takes a sanitized snapshot of the CareerPilot alerts the local Prometheus reports. It stays strictly separate from the synthetic-only On-Call Investigator (Entry 014).
+
+### Tasks and Prompts (summarized)
+
+1. **Implementation request.** The developer asked for a standard-library-only adapter:
+   - HTTP GET only, to the fixed endpoint `http://127.0.0.1:9090/api/v1/alerts`;
+   - no arbitrary URLs, redirects, proxies, credentials, or user-defined PromQL;
+   - network access opt-in through an explicit flag, with no connection by default;
+   - a short timeout and a bounded response size;
+   - strict validation of the API status, alert list, the four allowlisted alerts, their severities, states, and timezone-aware `activeAt` timestamps;
+   - no raw annotations, unexpected labels, secrets, request bodies, or resume content in output;
+   - a sanitized snapshot labelled `source=live-prometheus` and `synthetic=false`;
+   - no use of the synthetic-only investigator, and no resolution claims;
+   - an empty snapshot, not a health conclusion, when no alerts are active;
+   - mocked-HTTP tests only.
+
+   Scope was exactly two new files, with no live requests.
+2. **Documentation request.** Update `README.md` and this log.
+
+### Context Supplied
+
+- `AGENTS.md`.
+- `custom-agent/oncall_investigator.py` and its tests, for conventions and to confirm the investigator rejects live snapshots.
+- `monitoring/alerts/careerpilot.rules.yml`, for alert names and severities.
+- For documentation: the README On-Call Agent section and this log.
+
+### Files Changed
+
+- **`custom-agent/prometheus_alert_adapter.py`** (new):
+  - **Request:** `--connect` sends one GET with an `Accept` header only, through an opener that ignores environment proxies and refuses redirects. The timeout is 3 seconds, and responses are limited to 256 KiB and 100 alerts.
+  - **Validation:** strict, as requested. Prometheus's nanosecond `activeAt` precision is truncated to microseconds and converted to UTC.
+  - **Output:** a JSON snapshot on stdout. Each alert has only `alertname`, `severity`, `state`, and `active_at_utc`, with the Collector alert listed first. Notes state that the snapshot is not a health assessment, does not assess resolution, and is not investigator input.
+  - **Exit codes:** `0` snapshot printed, `1` no `--connect`, `2` rejected. Error messages never quote response content.
+- **`custom-agent/tests/test_prometheus_alert_adapter.py`** (new, 21 tests). It uses fake openers, and fake `urllib` transport handlers that exercise the real opener's redirect handling without connecting. It covers:
+  - offline default and the request shape;
+  - environment proxies and refused redirects;
+  - sanitized output for all four alerts, and the empty snapshot;
+  - rejection of the snapshot by the investigator;
+  - malformed JSON, bad API status, and oversized responses;
+  - unknown alerts, bad severities, states, and timestamps;
+  - unexpected status or URL, and network failures;
+  - a source-import check.
+- **`README.md`:** a new "Prometheus Alert Adapter" subsection under On-Call Agent, and two reference links.
+- **`docs/ai-development-log.md`:** this entry.
+
+`oncall_investigator.py` and its tests were not modified.
+
+### Manual Review and Corrections
+
+- **Before the first test run,** Claude Code's own review fixed three test problems:
+  - a helper call that would have raised `TypeError`;
+  - an endpoint-count check that would also have counted the docstring URL;
+  - a snapshot note whose wording clashed with the test that output never says "resolved".
+- **The first test run** had 1 failure and 2 errors, all test defects:
+  - `run_main` wrapped a real `urllib` opener inside the fake opener, so `open()` returned the opener instead of a response;
+  - the proxy test expected a `ProxyHandler` to be present. `urllib` drops a `ProxyHandler({})` because it has no proxies, although passing it still replaces the environment-proxy default. The test now sets `HTTP_PROXY` and checks that no proxy handler exists.
+
+  No adapter code changed as a result of these failures.
+- **Developer review:** the developer reviewed the adapter and ran the live read-only query.
+
+### Tests Executed
+
+**Local, mocked HTTP only (run by Claude Code):**
+
+- `python -m unittest discover -s custom-agent/tests -p "test_prometheus_alert_adapter.py" -v`: 21 of 21 passed after the corrections above.
+- `python -m unittest discover -s custom-agent/tests`: 59 of 59 passed (the existing 38 plus the 21 new tests).
+- `git diff --check`: clean.
+
+**Live read-only query (October 26, 2026 UTC):**
+
+- The query against the local Prometheus succeeded. It returned one firing `CareerPilotBackendTelemetryMissing` alert with severity `info`.
+- **Interpretation:** the local backend was stopped at the time, which is a plausible explanation. This is not a proven cause, and it is not a production incident.
+
+**GitHub Actions:** not yet run for this change.
+
+### Human Oversight
+
+- **Done by the developer:** reviewed the changes and ran the live query.
+- **What Claude Code did not do:** make live requests, stage, commit, push, or deploy.
+- **What did not happen:**
+  - no access to or changes in PostgreSQL or the protected backups;
+  - no changes to running containers or monitoring configuration;
+  - no MCP or Render changes;
+  - no `.env` file or secret was read.
+
+### Limitations and Safety Constraints
+
+- The adapter is read-only and local-only. It never connects without `--connect`, and only ever to the fixed endpoint.
+- It reports only what Prometheus says is active. It does not diagnose root cause, verify recovery, or judge system health; an empty snapshot is not evidence of health.
+- The snapshot is never investigator input. The investigator accepts synthetic evidence only and rejects live snapshots.
+- No database, Docker, shell, file writes, or remediation.
+- Strict validation means any unknown alert in Prometheus makes the whole response fail.
+
+### Follow-up Work
+
+- Commit the adapter, tests, and documentation, then confirm CI.
+- `docs/agent-extension-pack.md` and `docs/permissions.md` do not yet describe the investigator or the adapter.
+- **Not implemented:** linking live snapshots to investigation (it would need an explicit, reviewed design), operational alert triggering, and any remediation.
+- **Render deployment** remains on hold.
+
+### Outcome
+
+CareerPilot has a read-only, opt-in Prometheus alert adapter. It produces sanitized live alert snapshots from the fixed local endpoint, tested with 21 mocked-HTTP tests (59 of 59 across the custom-agent suite), and it worked once against the live local Prometheus. It stays separate from the synthetic-only investigator and makes no health, root-cause, or recovery claims.

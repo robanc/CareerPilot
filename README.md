@@ -704,6 +704,24 @@ Exit code `0` means a report was produced; `2` means the input was rejected. `--
 - The investigator was committed as `ae8a0ab`.
 - GitHub Actions CI run #27 passed all five jobs.
 
+### Prometheus Alert Adapter
+
+[`custom-agent/prometheus_alert_adapter.py`](custom-agent/prometheus_alert_adapter.py) is a read-only, local-only adapter that takes a sanitized snapshot of the CareerPilot alerts Prometheus currently reports.
+
+```powershell
+python custom-agent/prometheus_alert_adapter.py --connect
+```
+
+- **Offline by default:** without `--connect` it makes no connection and exits with code `1`.
+- **One fixed request:** with `--connect` it sends a single HTTP GET to `http://127.0.0.1:9090/api/v1/alerts`. It accepts no URL, query, or credentials, uses no proxies, refuses redirects, and enforces a 3-second timeout and a 256 KiB response limit.
+- **Strict validation:** only the four CareerPilot alerts, with their documented severities, in state `pending` or `firing`, with timezone-aware `activeAt` timestamps. Anything unexpected rejects the whole response (exit code `2`).
+- **Sanitized JSON output:** each alert carries only its name, severity, state, and UTC activation time. Annotations, other labels, and values are dropped. The snapshot is labelled `"source": "live-prometheus"` and `"synthetic": false`.
+- **No conclusions:** an empty snapshot does not mean the system is healthy. The adapter does not diagnose root cause or verify recovery.
+- **Separate from the investigator:** the snapshot is not passed to the On-Call Investigator, which accepts synthetic evidence only and rejects live snapshots.
+- **No other access:** no database, Docker, shell, file writes, or remediation.
+
+**Verification:** 21 of 21 adapter tests passed, using mocked HTTP responses only, and the full custom-agent suite passed 59 of 59. On October 26, 2026 (UTC), a live read-only query of the local Prometheus returned one firing `CareerPilotBackendTelemetryMissing` (info) alert.
+
 ### Current Limitations
 
 CareerPilot does not currently provide:
@@ -724,6 +742,8 @@ Any future on-call agent should operate within explicit permission boundaries, m
 - [Release Auditor](custom-agent/release_auditor.py)
 - [On-Call Investigator](custom-agent/oncall_investigator.py)
 - [On-Call Investigator Tests](custom-agent/tests/test_oncall_investigator.py)
+- [Prometheus Alert Adapter](custom-agent/prometheus_alert_adapter.py)
+- [Prometheus Alert Adapter Tests](custom-agent/tests/test_prometheus_alert_adapter.py)
 - [Incident Response Runbook](monitoring/INCIDENT_RESPONSE.md)
 - [AI Development Log](docs/ai-development-log.md)
 

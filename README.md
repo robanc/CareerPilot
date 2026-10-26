@@ -42,7 +42,6 @@ In local mode, CareerPilot provides a full-stack application using a React front
 
 CareerPilot also includes a separate public demonstration mode designed to use fictional data and prevent modifications. In this mode, write operations are blocked and the Resume Library is unavailable.
 
-The public demonstration deployment on Render is **on hold** because of an unresolved PostgreSQL authentication failure (see [Deployment](#deployment)).
 
 
 ## Product Specification
@@ -55,11 +54,12 @@ The MVP requirements, functional specifications, user stories, expected behavior
 
 Development and outstanding work are tracked through the public [GitHub Issues tracker](https://github.com/robanc/CareerPilot/issues).
 
-**Tracked issue:**
+**Task Tracked issue:**
 - [Issue #3 — Resolve Render PostgreSQL authentication and verify public demo](https://github.com/robanc/CareerPilot/issues/3) — Open; on hold pending Render Support. Includes explicit acceptance criteria and deployment verification requirements.
   - [Claude Code review of Issue #3](https://github.com/robanc/CareerPilot/issues/3#issuecomment-6406935494): a read-only comparison of the implementation with the issue's acceptance criteria. The issue remains open.
 
 Coding-agent participation is documented separately in [AI Development Log](docs/ai-development-log.md). Issue-specific agent activity is linked to its evidence; the Issue #3 review is recorded in Entry 016.
+
 
 
 ## Agent Team Specification
@@ -106,6 +106,7 @@ These components are available as part of the agent workflow; their existence do
 - [Claude Code Instructions](CLAUDE.md)
 
 
+
 ## Context Management
 
 CareerPilot uses structured project documentation to provide coding agents with consistent requirements, engineering conventions, development workflows, and security boundaries.
@@ -135,6 +136,7 @@ The primary agent context file is [AGENTS.md](AGENTS.md), which describes the pr
 6. **Verification and evidence:** Changes are reviewed, tested, and documented before being considered complete.
 
 This modular approach helps keep agent instructions focused, supports reproducible development, and maintains human oversight of sensitive operations.
+
 
 
 ## Application
@@ -180,6 +182,7 @@ Application and saved-resume records are stored in PostgreSQL. The Docker Compos
 - [API Contract](openapi.yaml)
 
 The public demonstration environment is separate from the local application; its deployment is on hold (see [Deployment](#deployment)).
+
 
 
 ## Testing
@@ -266,6 +269,7 @@ All of these suites, plus the `promtool` alert rule checks, run in GitHub Action
 - [Custom Agent Tests](custom-agent/tests/)
 
 
+
 ## Containerization
 
 CareerPilot uses Docker and Docker Compose to package and run the complete full-stack application locally.
@@ -313,6 +317,7 @@ Do not use `docker compose down -v` if you need to preserve existing database re
 - [Backend Dockerfile](backend/Dockerfile)
 - [Frontend Dockerfile](frontend/Dockerfile)
 - [Nginx Configuration](frontend/nginx.conf)
+
 
 
 ## Deployment
@@ -405,6 +410,7 @@ No database provisioning or deployment will be performed until Render Support co
 - [Claude Code Review of Issue #3](https://github.com/robanc/CareerPilot/issues/3#issuecomment-6406935494)
 
 
+
 ## CI/CD
 
 CareerPilot uses GitHub Actions for continuous integration and includes a separate, manually triggered deployment workflow for the Render public demonstration environment.
@@ -458,8 +464,8 @@ The approval gate depends on the `production` environment being configured with 
 ### Current CI/CD Status
 
 - **Continuous integration:** Operational. Latest verified run: #32, all five jobs passed (see the [CI workflow runs](https://github.com/robanc/CareerPilot/actions/workflows/ci.yml)).
-- **Manual deployment workflow:** Implemented, but never run to a successful public release.
-- **Automatic deployment:** Not implemented. The project intentionally requires human approval for production deployment.
+- **Manual deployment workflow:** Implemented.
+- **Automatic deployment:** The project intentionally requires human approval for production deployment.
 - **Production deployment:** On hold (see [Deployment](#deployment)).
 
 ### Implementation References
@@ -470,6 +476,7 @@ The approval gate depends on the `production` environment being configured with 
 - [Render Deployment Guide](docs/deployment-render.md)
 - [GitHub Actions Runs](https://github.com/robanc/CareerPilot/actions)
 - [CI Workflow Runs (latest verified: #32)](https://github.com/robanc/CareerPilot/actions/workflows/ci.yml)
+
 
 
 ## Observability
@@ -537,6 +544,7 @@ Observability instrumentation avoids recording resume contents, job descriptions
 - [Render Smoke Test](ops/smoke-test-render.sh)
 
 
+
 ## Alerting on User Impact
 
 CareerPilot provides health-check endpoints, user-facing error messages, and four local Prometheus alert rules for backend errors, latency, and telemetry availability. Alerts are evaluated by the local monitoring stack only; no notifications are sent and production alerting is not configured.
@@ -599,6 +607,7 @@ Potential future improvements include external uptime monitoring, notifications 
 - [Prometheus Alert Rules](monitoring/alerts/careerpilot.rules.yml)
 - [Alert Rule Tests](monitoring/alerts/tests/careerpilot.rules.test.yml)
 - [Incident Response Runbook](monitoring/INCIDENT_RESPONSE.md)
+
 
 
 ## On-Call Agent
@@ -715,14 +724,6 @@ Exit code `0` means no incident was left open, `1` that one was, and `2` that th
 
 **Verification:** in GitHub Actions CI run #32 (commit `54ea857`; see the [CI workflow runs](https://github.com/robanc/CareerPilot/actions/workflows/ci.yml)), the Linux custom-agent suite reported "Ran 90 tests" and "OK", with no skipped tests. That includes the 30 responder tests and their 3 symlink-refusal tests. Locally on Windows, 87 passed and the 3 symlink tests were skipped, because that account cannot create symlinks.
 
-### Rubric Status
-
-The capstone's on-call agent criterion is addressed **only partially, with synthetic fixtures**, and **credit is not guaranteed**:
-
-- **Demonstrated, synthetic only:** an agent that a (synthetic) alert event wakes, which applies an allowlisted, reversible repair, verifies it, rolls back on failure, and leaves an audit trail.
-- **Not provided:** waking on real Prometheus alerts (no Alertmanager or webhook is configured), or repairing the real application or any real service.
-- **The other components:** the On-Call Investigator is synthetic-only, deterministic, read-only, and non-remediating; the Prometheus alert adapter is a read-only, opt-in snapshot tool. The adapter is deliberately not connected to the investigator or the responder.
-
 ### Current Limitations
 
 CareerPilot does not currently provide:
@@ -750,6 +751,7 @@ Any future on-call agent should operate within explicit permission boundaries, m
 - [On-Call Responder Tests](custom-agent/tests/test_oncall_responder.py)
 - [Incident Response Runbook](monitoring/INCIDENT_RESPONSE.md)
 - [AI Development Log](docs/ai-development-log.md)
+
 
 
 ## Reproducibility
